@@ -15,6 +15,7 @@
 #include "pc1401.h"
 #include "pc1251.h"
 #include "pc1350.h"
+#include "pc1360.h"
 #include "pc1403.h"
 
 #include "machine/ram.h"
@@ -145,6 +146,43 @@ void pc1350_state::pc1350_mem(address_map &map)
 	map(0x0000, 0x1fff).rom();
 	map(0x7000, 0x7eff).rw(FUNC(pc1350_state::lcd_read), FUNC(pc1350_state::lcd_write));
 	map(0x8000, 0xffff).rom();
+}
+
+/*
+ * Memory map cross-checked against the user's SharpPocketLib PC-1360
+ * knowledgebase -- see the large comment block in pc1360.h for the full
+ * source list and what's confirmed vs. still open. Summary: every window
+ * below is now sourced (not guessed) except the exact keyboard matrix
+ * wiring (in_a_r() in pc1360_m.cpp) and two-card RAM-bank switching.
+ */
+void pc1360_state::pc1360_mem(address_map &map)
+{
+	map(0x0000, 0x1fff).rom();
+	// CONFIRMED via this driver's own ROM disassembly: real I/O latches,
+	// not ROM -- see sysport_r/sysport_w in pc1360_m.cpp. Installed after
+	// the wider .rom() mapping above so it wins for this narrow slice.
+	map(0x0030, 0x003f).rw(FUNC(pc1360_state::sysport_r), FUNC(pc1360_state::sysport_w));
+	// CONFIRMED (knowledgebase): graphics VRAM 0x2800-0x31ff (five 512-byte
+	// column-groups) plus the display-segment status byte at 0x303c, all
+	// handled by lcd_read/lcd_write's flat m_reg[] latch; the unexplained
+	// 0x3200-0x33ff gap and the narrow I/O registers below also fall inside
+	// this range but are installed afterward so they take priority.
+	map(0x2800, 0x37ff).rw(FUNC(pc1360_state::lcd_read), FUNC(pc1360_state::lcd_write));
+	// CONFIRMED (knowledgebase): ROM bank-select port, bits 0-2 select
+	// one of 8 banks; mirrored back on read exactly as this latch models.
+	map(0x3400, 0x3400).rw(FUNC(pc1360_state::bank_r), FUNC(pc1360_state::bank_w));
+	// CONFIRMED (knowledgebase): 11-pin STROBE (bit0 only).
+	map(0x3800, 0x3800).rw(FUNC(pc1360_state::strobe_r), FUNC(pc1360_state::strobe_w));
+	// CONFIRMED (knowledgebase): serial/11-pin control register.
+	map(0x3a00, 0x3a00).rw(FUNC(pc1360_state::serial_r), FUNC(pc1360_state::serial_w));
+	// CONFIRMED (knowledgebase): keyboard-strobe register (bits0-6
+	// keyboard, bit7 export-bridge) -- feeds in_a_r()'s scan logic.
+	map(0x3e00, 0x3e00).rw(FUNC(pc1360_state::keyboard_line_r), FUNC(pc1360_state::keyboard_line_w));
+	map(0x4000, 0x7fff).bankr("bank1");
+	// CONFIRMED (knowledgebase): RAM card lives at 0x8000-0xffff;
+	// machine_start() below installs the real, size-dependent window
+	// (4K/8K/16K/32K -> base 0xf000/0xe000/0xc000/0x8000) over this.
+	map(0x8000, 0xffff).ram();
 }
 
 void pc1403_state::pc1403_mem(address_map &map)
@@ -669,6 +707,155 @@ static INPUT_PORTS_START( pc1350 )
 INPUT_PORTS_END
 
 
+/*
+ * CONFIRMED matrix (see pc1360_m.cpp's in_a_r() for the full row-decode
+ * history/citations): KEY0-KEY6 are the PD (0x3e00)-selected rows, KEY7-KEY10
+ * are the four PA-output-bit-selected rows, KEY11 is the software-polled
+ * Power switch. MODE (KEY7 bit 0x08) and CLS (KEY8 bit 0x08) specifically
+ * match the Systemhandbuch's own worked example program for testing [CLS]
+ * (PA output bit 1 selects the row, input bit 3 reads it back) byte for
+ * byte, and were confirmed to have the documented effect (MODE flips the
+ * intern/extern mode flag; CLS clears the command line and reprints the
+ * bank number) via direct headless VRAM-diff testing.
+ *
+ * MODE and CLS's PORT_CODE defaults below are deliberately NOT KEYCODE_F1/
+ * KEYCODE_ESC (the "natural" choices, and pc1350.cpp's own picks for the
+ * equivalent keys) -- both are also default MAME UI shortcuts (F1 = UI
+ * Help, Escape = UI Cancel/exit), so with the "Input (this Machine)"-level
+ * remap unset they get intercepted by MAME's own UI before the emulated
+ * machine ever sees them, which looks exactly like "the key doesn't work"
+ * (this is what was actually going on when CLS "did nothing" via Escape --
+ * confirmed by testing, not just theory: remapping it to Backspace, which
+ * has no UI binding, made it work). Backspace/Pause have no such binding.
+ */
+static INPUT_PORTS_START( pc1360 )
+	PORT_START("KEY0")
+	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME(")     >") PORT_CODE(KEYCODE_CLOSEBRACE)
+	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME(":") PORT_CODE(KEYCODE_COLON)
+	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME(";") PORT_CODE(KEYCODE_QUOTE)
+	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME(",") PORT_CODE(KEYCODE_COMMA)
+	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("SML") PORT_CODE(KEYCODE_LCONTROL) PORT_CODE(KEYCODE_RCONTROL)
+	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("DEF") PORT_CODE(KEYCODE_LALT) PORT_CODE(KEYCODE_RALT)
+	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("SHIFT") PORT_CODE(KEYCODE_RSHIFT)
+
+	PORT_START("KEY1")
+	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("(     <") PORT_CODE(KEYCODE_OPENBRACE)
+	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("/") PORT_CODE(KEYCODE_SLASH) PORT_CODE(KEYCODE_SLASH_PAD)
+	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("*") PORT_CODE(KEYCODE_ASTERISK)
+	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("-     ^") PORT_CODE(KEYCODE_MINUS) PORT_CODE(KEYCODE_MINUS_PAD)
+	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("Z") PORT_CODE(KEYCODE_Z)
+	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("A") PORT_CODE(KEYCODE_A)
+	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("Q     !") PORT_CODE(KEYCODE_Q)
+
+	PORT_START("KEY2")
+	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("9") PORT_CODE(KEYCODE_9) PORT_CODE(KEYCODE_9_PAD)
+	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("6") PORT_CODE(KEYCODE_6) PORT_CODE(KEYCODE_6_PAD)
+	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("3") PORT_CODE(KEYCODE_3) PORT_CODE(KEYCODE_3_PAD)
+	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("+") PORT_CODE(KEYCODE_PLUS_PAD)
+	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("X") PORT_CODE(KEYCODE_X)
+	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("S") PORT_CODE(KEYCODE_S)
+	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("W     \"") PORT_CODE(KEYCODE_W)
+
+	PORT_START("KEY3")
+	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("8") PORT_CODE(KEYCODE_8) PORT_CODE(KEYCODE_8_PAD)
+	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("5") PORT_CODE(KEYCODE_5) PORT_CODE(KEYCODE_5_PAD)
+	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("2") PORT_CODE(KEYCODE_2) PORT_CODE(KEYCODE_2_PAD)
+	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME(".") PORT_CODE(KEYCODE_STOP)
+	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("C") PORT_CODE(KEYCODE_C)
+	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("D") PORT_CODE(KEYCODE_D)
+	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("E     #") PORT_CODE(KEYCODE_E)
+
+	PORT_START("KEY4")
+	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("7") PORT_CODE(KEYCODE_7) PORT_CODE(KEYCODE_7_PAD)
+	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("4") PORT_CODE(KEYCODE_4) PORT_CODE(KEYCODE_4_PAD)
+	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("1") PORT_CODE(KEYCODE_1) PORT_CODE(KEYCODE_1_PAD)
+	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("0") PORT_CODE(KEYCODE_0) PORT_CODE(KEYCODE_0_PAD)
+	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("V") PORT_CODE(KEYCODE_V)
+	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("F") PORT_CODE(KEYCODE_F)
+	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("R     $") PORT_CODE(KEYCODE_R)
+
+	PORT_START("KEY5")
+	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("UP") PORT_CODE(KEYCODE_UP)
+	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("DOWN") PORT_CODE(KEYCODE_DOWN)
+	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("LEFT") PORT_CODE(KEYCODE_LEFT)
+	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("RIGHT") PORT_CODE(KEYCODE_RIGHT)
+	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("B") PORT_CODE(KEYCODE_B)
+	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("G") PORT_CODE(KEYCODE_G)
+	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("T     %") PORT_CODE(KEYCODE_T)
+
+	PORT_START("KEY6")
+	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_UNUSED)
+	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_UNUSED)
+	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("INS") PORT_CODE(KEYCODE_INSERT)
+	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("DEL") PORT_CODE(KEYCODE_DEL)
+	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("N") PORT_CODE(KEYCODE_N)
+	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("H") PORT_CODE(KEYCODE_H)
+	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("Y     &") PORT_CODE(KEYCODE_Y)
+
+	PORT_START("KEY7")
+	PORT_BIT(0x03, IP_ACTIVE_HIGH, IPT_UNUSED)
+	// CONFIRMED (headless VRAM/snapshot testing, not the Systemhandbuch's
+	// worked example -- see the block comment above INPUT_PORTS_START(pc1360)
+	// for the full story): this bit, not KEY8 bit 0x08 as the book's example
+	// program and this row's own bit 0x08 implied, is the one that actually
+	// clears the command line back to the ">" prompt when set. Moved here
+	// from KEY8.
+	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("CLS   CA") PORT_CODE(KEYCODE_BACKSPACE)
+	// FIXME: still just the book's documented position -- confirmed to NOT
+	// have any visible effect at the "RUN MODE" ready prompt (headless
+	// testing, holding this bit alone produces no screen change beyond the
+	// usual per-frame status-byte noise). Left wired here since MODE's real
+	// function (per the Systemhandbuch) is an internal-monitor-mode flag
+	// that may simply not be visible outside that submode rather than being
+	// wired to the wrong bit -- but this is unconfirmed either way, and it's
+	// equally possible the real MODE key sits on one of the three PA-select
+	// values (0x10/0x20/0x40 of the *output* side) this driver doesn't wire
+	// to any key port at all (see the FIXME on the PA row-select loop in
+	// in_a_r(), pc1360_m.cpp).
+	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("MODE") PORT_CODE(KEYCODE_PAUSE)
+	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("M") PORT_CODE(KEYCODE_M)
+	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("J") PORT_CODE(KEYCODE_J)
+	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("U     ?") PORT_CODE(KEYCODE_U)
+
+	PORT_START("KEY8")
+	PORT_BIT(0x0f, IP_ACTIVE_HIGH, IPT_UNUSED)
+	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("SPC") PORT_CODE(KEYCODE_SPACE)
+	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("K") PORT_CODE(KEYCODE_K)
+	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("I     Pi") PORT_CODE(KEYCODE_I)
+
+	PORT_START("KEY9")
+	PORT_BIT(0x0f, IP_ACTIVE_HIGH, IPT_UNUSED)
+	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("ENTER") PORT_CODE(KEYCODE_ENTER) PORT_CODE(KEYCODE_ENTER_PAD)
+	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("L") PORT_CODE(KEYCODE_L)
+	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("O") PORT_CODE(KEYCODE_O)
+
+	PORT_START("KEY10")
+	PORT_BIT(0x1f, IP_ACTIVE_HIGH, IPT_UNUSED)
+	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("=") PORT_CODE(KEYCODE_EQUALS)
+	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("P     Alpha") PORT_CODE(KEYCODE_P)
+
+	PORT_START("KEY11")
+	PORT_DIPNAME( 0xc0, 0x00, "Power")
+	PORT_DIPSETTING(    0xc0, DEF_STR( Off ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( On ) )
+
+	PORT_START("EXTRA")
+	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("BRK   ON") PORT_CODE(KEYCODE_F4)
+	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("Reset") PORT_CODE(KEYCODE_F3)
+
+	PORT_START("DSW0")
+	PORT_DIPNAME( 0x07, 0x01, "Contrast")
+	PORT_DIPSETTING(    0x00, "0/Low" )
+	PORT_DIPSETTING(    0x01, "1" )
+	PORT_DIPSETTING(    0x02, "2" )
+	PORT_DIPSETTING(    0x03, "3" )
+	PORT_DIPSETTING(    0x04, "4" )
+	PORT_DIPSETTING(    0x05, "5" )
+	PORT_DIPSETTING(    0x06, "6" )
+	PORT_DIPSETTING(    0x07, "7/High" )
+INPUT_PORTS_END
+
+
 static const gfx_layout pc1401_charlayout =
 {
 	2,21,
@@ -829,6 +1016,35 @@ void pc1350_state::pc1350(machine_config &config)
 	RAM(config, m_ram).set_default_size("4K").set_extra_options("12K,20K");
 }
 
+void pc1360_state::pc1360(machine_config &config)
+{
+	pocketc_base(config);
+	// NOTE: clock copied from pc1350 (also 768kHz-class per independent
+	// hardware sources for both machines' CPUs); the "faster CPU" some
+	// sources attribute to the PC-1360 is unconfirmed and may just refer to
+	// the ROM/BASIC, not the clock -- verify against a real unit if in doubt.
+	SC61860(config, m_maincpu, 192000);        /* 7.8336 MHz, unverified for pc1360 */
+	m_maincpu->set_addrmap(AS_PROGRAM, &pc1360_state::pc1360_mem);
+	m_maincpu->reset_cb().set_constant(0);
+	m_maincpu->brk_cb().set(FUNC(pc1360_state::brk_r));
+	m_maincpu->x_cb().set_constant(0);
+	m_maincpu->in_a_cb().set(FUNC(pc1360_state::in_a_r));
+	m_maincpu->out_a_cb().set(FUNC(pc1360_state::out_a_w));
+	m_maincpu->in_b_cb().set(FUNC(pc1360_state::in_b_r));
+	m_maincpu->out_b_cb().set(FUNC(pc1360_state::out_b_w));
+	m_maincpu->out_c_cb().set(FUNC(pc1360_state::out_c_w));
+
+	/* video hardware: confirmed identical resolution/layout to pc1350 */
+	m_screen->set_size(640, 252);
+	m_screen->set_visarea(0, 640-1, 0, 252-1);
+	m_screen->set_screen_update(FUNC(pc1360_state::screen_update));
+
+	/* RAM card -- sizes match the knowledgebase-confirmed real card sizes
+	   (4K/8K/16K/32K -> windows 0xf000/0xe000/0xc000/0x8000-0xffff), see
+	   pc1360_state::machine_start() in pc1360_m.cpp */
+	RAM(config, m_ram).set_default_size("4K").set_extra_options("8K,16K,32K");
+}
+
 void pc1403_state::pc1403(machine_config &config)
 {
 	pocketc_base(config);
@@ -905,6 +1121,12 @@ ROM_START(pc1350)
 	ROM_REGION(0x100,"gfx1",ROMREGION_ERASEFF)
 ROM_END
 
+// NOTE: this ROM_START predates the rest of this driver -- it was already
+// present (wired to a non-functional pc1401 clone) before pc1360.h/.cpp/
+// _m.cpp and pc1360_mem()/pc1360()/INPUT_PORTS_START(pc1360) were added.
+// If your own dump's checksums match the ones below, this block can be
+// reused as-is; if not, add a second ROM_START for your revision instead
+// of editing these checksums.
 ROM_START( pc1360 )
 	ROM_REGION( 0x10000, "maincpu", ROMREGION_ERASEFF )
 	ROM_LOAD( "cpu-1360.rom", 0x0000, 0x2000, CRC(8fc9bf75) SHA1(f803cfecb8179f47031901c4d5bd546ac93118b1))
@@ -974,9 +1196,14 @@ COMP( 1982, pc1261,   pc1260, 0,      pc1261,  pc1251, pc1260_state, empty_init,
 COMP( 1984, pc1350,   0,      0,      pc1350,  pc1350, pc1350_state, empty_init, "Sharp", "Pocket Computer 1350",      MACHINE_NO_SOUND )
 COMP( 198?, pc1450,   0,      0,      pc1350,  pc1350, pc1350_state, empty_init, "Sharp", "Pocket Computer 1450",      MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
 
+// FIXME: was previously registered as a non-functional clone of pc1401,
+// reusing pc1401's class/machine config/ROM map wholesale (which is wrong --
+// the PC-1360 is its own machine, not a PC-1401 variant). Now stands alone
+// with its own (still unverified/skeleton) driver -- see pc1360.h.
+COMP( 1987, pc1360,   0,      0,      pc1360,  pc1360, pc1360_state, empty_init, "Sharp", "Pocket Computer 1360",      MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
+
 COMP( 1983, pc1401,   0,      0,      pc1401,  pc1401, pc1401_state, empty_init, "Sharp", "Pocket Computer 1401",      MACHINE_NO_SOUND)
 COMP( 1984, pc1402,   pc1401, 0,      pc1402,  pc1401, pc1401_state, empty_init, "Sharp", "Pocket Computer 1402",      MACHINE_NO_SOUND)
-COMP( 198?, pc1360,   pc1401, 0,      pc1401,  pc1401, pc1401_state, empty_init, "Sharp", "Pocket Computer 1360",      MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
 
 // 72kb rom, 32kb ram, cpu? pc1360
 COMP( 1986, pc1403,   0,      0,      pc1403,  pc1403, pc1403_state, empty_init, "Sharp", "Pocket Computer 1403",      MACHINE_NOT_WORKING  | MACHINE_NO_SOUND)
