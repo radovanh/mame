@@ -89,12 +89,13 @@ uint8_t pc1360_state::in_a_r()
 	// 0-3 -- i.e. there are up to 3 more PA-selected rows (bits 4-6) that
 	// this driver doesn't model at all, and any key living on one of them
 	// would be completely unreachable, the same class of bug the PD/0x3e00
-	// row-decode fix in this function addressed. MODE (see the FIXME next
-	// to it in pocketc.cpp's INPUT_PORTS_START(pc1360)) is the prime
-	// suspect: it's confirmed to be inert wherever it's currently wired
-	// within KEY7's row, and it might simply live on one of these unread
-	// rows instead. Not yet investigated -- would need three more key ports
-	// (KEY12-KEY14 or similar) and array-size/loop changes to test.
+	// row-decode fix in this function addressed. A speculative attempt at
+	// wiring these up (KEY11-13, one test bit each) found no effect on any
+	// of them, so it was reverted rather than shipped half-confirmed -- see
+	// chat history. MODE and the cursor keys (UP/DOWN/LEFT/RIGHT, currently
+	// in KEY5 where they're confirmed NOT to work -- LEFT/RIGHT print a
+	// garbage "0." and DOWN toggles the unrelated JAPAN display flag) remain
+	// unexplained; bits 4-6 here are still a real, uninvestigated gap.
 	for (int bit = 0, key = 7; bit < 4; bit++, key++)
 		if (BIT(m_outa, bit))
 			data |= m_keys[key]->read();
@@ -300,20 +301,20 @@ void pc1360_state::machine_start()
 
 	address_space &space = m_maincpu->space(AS_PROGRAM);
 
-	// CONFIRMED (knowledgebase): RAM-card address window is size-dependent,
-	// always ending at 0xffff and based at 0x10000-size -- 4K -> 0xf000,
-	// 8K -> 0xe000, 16K -> 0xc000, 32K -> 0x8000. This replaces the
-	// previous made-up tiered-window scheme (which didn't match any
-	// documented real card layout).
+	// CORRECTED: 0x8000-0xffff is flat, always-present 32K RAM, not a
+	// size-dependent window with the remainder nop_readwrite'd. The
+	// previous size-dependent scheme (4K -> base 0xf000, nop'ing
+	// 0x8000-0xefff and similar for 8K/16K) was contradicted by (1) the
+	// user directly testing address 0xe030 on the real device's debugger
+	// and confirming it's live RAM there, and (2) Pokecom Go (a
+	// confirmed-working reference PC-1360 emulator on the same ROMs)
+	// mapping this whole range as one flat mainram[] array with its
+	// optional RAM-card banking disabled. See the RAM(config, m_ram)
+	// comment in pocketc.cpp's pc1360() for the full writeup.
 	const uint32_t ram_size = m_ram->size();
 	const uint32_t ram_base = 0x10000 - ram_size;
 
 	space.install_ram(ram_base, 0xffff, m_ram->pointer());
-
-	if (ram_base > 0x8000)
-	{
-		space.nop_readwrite(0x8000, ram_base - 1);
-	}
 
 	// Points directly at the RAM device's own buffer -- unlike the
 	// pc1350_state::machine_start() pattern this was originally copied

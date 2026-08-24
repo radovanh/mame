@@ -179,9 +179,8 @@ void pc1360_state::pc1360_mem(address_map &map)
 	// keyboard, bit7 export-bridge) -- feeds in_a_r()'s scan logic.
 	map(0x3e00, 0x3e00).rw(FUNC(pc1360_state::keyboard_line_r), FUNC(pc1360_state::keyboard_line_w));
 	map(0x4000, 0x7fff).bankr("bank1");
-	// CONFIRMED (knowledgebase): RAM card lives at 0x8000-0xffff;
-	// machine_start() below installs the real, size-dependent window
-	// (4K/8K/16K/32K -> base 0xf000/0xe000/0xc000/0x8000) over this.
+	// CONFIRMED: 0x8000-0xffff is flat, always-present 32K RAM -- see the
+	// RAM(config, m_ram) comment in pc1360() and machine_start() below.
 	map(0x8000, 0xffff).ram();
 }
 
@@ -711,22 +710,51 @@ INPUT_PORTS_END
  * CONFIRMED matrix (see pc1360_m.cpp's in_a_r() for the full row-decode
  * history/citations): KEY0-KEY6 are the PD (0x3e00)-selected rows, KEY7-KEY10
  * are the four PA-output-bit-selected rows, KEY11 is the software-polled
- * Power switch. MODE (KEY7 bit 0x08) and CLS (KEY8 bit 0x08) specifically
- * match the Systemhandbuch's own worked example program for testing [CLS]
- * (PA output bit 1 selects the row, input bit 3 reads it back) byte for
- * byte, and were confirmed to have the documented effect (MODE flips the
- * intern/extern mode flag; CLS clears the command line and reprints the
- * bank number) via direct headless VRAM-diff testing.
+ * Power switch. CLS lives at KEY7 bit 0x04 (see the comment above that
+ * PORT_BIT below -- confirmed via headless snapshot testing, not the
+ * Systemhandbuch's own worked example, which points at the wrong bit).
  *
- * MODE and CLS's PORT_CODE defaults below are deliberately NOT KEYCODE_F1/
- * KEYCODE_ESC (the "natural" choices, and pc1350.cpp's own picks for the
- * equivalent keys) -- both are also default MAME UI shortcuts (F1 = UI
- * Help, Escape = UI Cancel/exit), so with the "Input (this Machine)"-level
- * remap unset they get intercepted by MAME's own UI before the emulated
- * machine ever sees them, which looks exactly like "the key doesn't work"
- * (this is what was actually going on when CLS "did nothing" via Escape --
- * confirmed by testing, not just theory: remapping it to Backspace, which
- * has no UI binding, made it work). Backspace/Pause have no such binding.
+ * KEY5/KEY6/KEY7 cursor-cluster relabelling (user-confirmed, see chat
+ * history): the labels this driver originally carried over from pc1350.cpp
+ * for the cursor cluster turned out to be wired to the wrong electrical
+ * positions. Direct testing (headless bit-sweep/screenshot, then
+ * independently reconfirmed by the user via their own MAME artwork/layout
+ * remap) established that:
+ *   - KEY6 bit 0x08 (originally labelled DEL) is actually LEFT.
+ *   - KEY6 bit 0x04 (originally labelled INS) is actually RIGHT.
+ *   - KEY7 bit 0x08 (originally labelled MODE) is actually DEL.
+ *   - KEY6 bit 0x02 (originally IPT_UNUSED) is the REAL MODE key.
+ * The driver below has been relabelled to match. MODE's real position was
+ * found by directly polling the display status byte at 0x303c (bit 5,
+ * "PRO") across every still-unused bit in the matrix while headless --
+ * KEY6 0x02 is the only one that flips "RUN MODE" to "PROGRAM MODE" (a
+ * clean toggle on a quick tap, no long hold needed, unlike DEL). It is a
+ * genuinely separate key from KEY7 0x08 (DEL), not an alias of it --
+ * holding DEL alone never toggles PRO, and tapping MODE alone never
+ * deletes anything. KEYCODE_PAUSE (MODE's original physical-key binding)
+ * now lives on KEY6 0x02 instead of KEY7 0x08.
+ *
+ * KEY5 bits 0x04/0x08 (this driver's ORIGINAL LEFT/RIGHT positions,
+ * carried over from pc1350.cpp) are confirmed to NOT be LEFT/RIGHT --
+ * pressing them prints a garbage "0." to the display -- so they're left
+ * as IPT_UNUSED rather than mislabelled; their real function (if any) is
+ * still unknown, and the same bit-sweep that found MODE found no other
+ * effect from them. INS's real electrical position is likewise still
+ * unknown -- KEYCODE_INSERT isn't attached to anything below. UP/DOWN
+ * (KEY5 bits 0x01/0x02) remain unconfirmed/not working -- DOWN toggles
+ * the unrelated JAPAN display flag instead of moving the cursor, and
+ * there is likely no dedicated physical key for that at all; left
+ * unchanged pending further investigation.
+ *
+ * CLS's PORT_CODE default below is deliberately NOT KEYCODE_ESC (the
+ * "natural" choice, and pc1350.cpp's own pick for the equivalent key) --
+ * it's also a default MAME UI shortcut (Escape = UI Cancel/exit), so with
+ * the "Input (this Machine)"-level remap unset it gets intercepted by
+ * MAME's own UI before the emulated machine ever sees it, which looks
+ * exactly like "the key doesn't work" (this is what was actually going on
+ * when CLS "did nothing" via Escape -- confirmed by testing, not just
+ * theory: remapping it to Backspace, which has no UI binding, made it
+ * work). Backspace/Pause/Delete have no such binding.
  */
 static INPUT_PORTS_START( pc1360 )
 	PORT_START("KEY0")
@@ -775,19 +803,45 @@ static INPUT_PORTS_START( pc1360 )
 	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("R     $") PORT_CODE(KEYCODE_R)
 
 	PORT_START("KEY5")
+	// UP/DOWN confirmed NOT to move the cursor (DOWN instead toggles the
+	// unrelated JAPAN display flag) -- left wired to their original codes
+	// pending further investigation; see the block comment above
+	// INPUT_PORTS_START(pc1360).
 	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("UP") PORT_CODE(KEYCODE_UP)
 	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("DOWN") PORT_CODE(KEYCODE_DOWN)
-	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("LEFT") PORT_CODE(KEYCODE_LEFT)
-	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("RIGHT") PORT_CODE(KEYCODE_RIGHT)
+	// CONFIRMED (headless bit-sweep/screenshot testing, independently
+	// reconfirmed by the user's own artwork remap -- see the block comment
+	// above INPUT_PORTS_START(pc1360)): these two bits are NOT LEFT/RIGHT --
+	// pressing them prints a garbage "0." to the display instead of moving
+	// the cursor. The real LEFT/RIGHT live at KEY6 0x08/0x04 (see below).
+	// Left as IPT_UNUSED since their real function is still unknown.
+	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_UNUSED)
+	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_UNUSED)
 	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("B") PORT_CODE(KEYCODE_B)
 	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("G") PORT_CODE(KEYCODE_G)
 	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("T     %") PORT_CODE(KEYCODE_T)
 
 	PORT_START("KEY6")
 	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_UNUSED)
-	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_UNUSED)
-	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("INS") PORT_CODE(KEYCODE_INSERT)
-	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("DEL") PORT_CODE(KEYCODE_DEL)
+	// CONFIRMED (headless bit-sweep testing, checking the display status
+	// byte at 0x303c directly -- see the block comment above
+	// INPUT_PORTS_START(pc1360)): this bit, previously unused, is the real
+	// MODE key. A quick tap toggles the display between "RUN MODE" and
+	// "PROGRAM MODE" (bit 5/0x20 "PRO" of the status byte) -- no long hold
+	// needed, unlike DEL. This is a genuinely different electrical position
+	// from KEY7 0x08, which is DEL (see below) -- the two are independent
+	// keys, not aliases of each other.
+	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("MODE") PORT_CODE(KEYCODE_PAUSE)
+	// CONFIRMED (headless bit-sweep/screenshot testing, independently
+	// reconfirmed by the user's own artwork remap -- see the block comment
+	// above INPUT_PORTS_START(pc1360)): this bit, originally labelled INS,
+	// is actually RIGHT. INS's own real electrical position/function is
+	// still unknown, so KEYCODE_INSERT isn't attached to anything below.
+	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("RIGHT") PORT_CODE(KEYCODE_RIGHT)
+	// CONFIRMED (same testing as RIGHT above): this bit, originally
+	// labelled DEL, is actually LEFT. Real DEL lives at KEY7 0x08 (see
+	// below).
+	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("LEFT") PORT_CODE(KEYCODE_LEFT)
 	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("N") PORT_CODE(KEYCODE_N)
 	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("H") PORT_CODE(KEYCODE_H)
 	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("Y     &") PORT_CODE(KEYCODE_Y)
@@ -801,18 +855,14 @@ static INPUT_PORTS_START( pc1360 )
 	// clears the command line back to the ">" prompt when set. Moved here
 	// from KEY8.
 	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("CLS   CA") PORT_CODE(KEYCODE_BACKSPACE)
-	// FIXME: still just the book's documented position -- confirmed to NOT
-	// have any visible effect at the "RUN MODE" ready prompt (headless
-	// testing, holding this bit alone produces no screen change beyond the
-	// usual per-frame status-byte noise). Left wired here since MODE's real
-	// function (per the Systemhandbuch) is an internal-monitor-mode flag
-	// that may simply not be visible outside that submode rather than being
-	// wired to the wrong bit -- but this is unconfirmed either way, and it's
-	// equally possible the real MODE key sits on one of the three PA-select
-	// values (0x10/0x20/0x40 of the *output* side) this driver doesn't wire
-	// to any key port at all (see the FIXME on the PA row-select loop in
-	// in_a_r(), pc1360_m.cpp).
-	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("MODE") PORT_CODE(KEYCODE_PAUSE)
+	// CONFIRMED (headless bit-sweep/screenshot testing, independently
+	// reconfirmed by the user's own artwork remap -- see the block comment
+	// above INPUT_PORTS_START(pc1360)): this bit, originally labelled MODE,
+	// is actually DEL -- it requires an unusually long hold (~5s) to
+	// register. The real MODE key lives at KEY6 0x02 (see above); it's a
+	// genuinely separate key from this one, so KEYCODE_PAUSE now lives
+	// there instead of here.
+	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("DEL") PORT_CODE(KEYCODE_DEL)
 	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("M") PORT_CODE(KEYCODE_M)
 	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("J") PORT_CODE(KEYCODE_J)
 	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("U     ?") PORT_CODE(KEYCODE_U)
@@ -1039,10 +1089,21 @@ void pc1360_state::pc1360(machine_config &config)
 	m_screen->set_visarea(0, 640-1, 0, 252-1);
 	m_screen->set_screen_update(FUNC(pc1360_state::screen_update));
 
-	/* RAM card -- sizes match the knowledgebase-confirmed real card sizes
-	   (4K/8K/16K/32K -> windows 0xf000/0xe000/0xc000/0x8000-0xffff), see
-	   pc1360_state::machine_start() in pc1360_m.cpp */
-	RAM(config, m_ram).set_default_size("4K").set_extra_options("8K,16K,32K");
+	/* CORRECTED: the previous "4K default, 8K/16K/32K RAM card options"
+	   scheme was wrong -- it modeled 0x8000-0xffff as only partially
+	   populated depending on RAM card size, with the rest of that window
+	   nop_readwrite'd. Two independent pieces of evidence contradict that:
+	   (1) the user directly tested address 0xe030 with the real device's
+	   debugger (load/FILL) and confirmed it is live, writable RAM there;
+	   (2) Pokecom Go, a confirmed-working reference PC-1360 emulator using
+	   the same ROM dumps, maps the entire 0x8000-0xffff range as one flat
+	   always-present 32K mainram[] array -- its optional "RAM card" bank
+	   feature (bankcram) exists in the source but is disabled/unused. The
+	   "RAM CARD S1/S2 CLEAR O.K.?" boot prompt is therefore about
+	   confirming a memory-clear operation, not gating whether this address
+	   window is populated at all. Fixed at a flat 32K -- see
+	   pc1360_state::machine_start() in pc1360_m.cpp. */
+	RAM(config, m_ram).set_default_size("32K");
 }
 
 void pc1403_state::pc1403(machine_config &config)
