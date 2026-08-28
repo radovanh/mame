@@ -369,15 +369,60 @@ void sc61860_device::sc61860_jump_rel_minus(int yes)
 
 void sc61860_device::sc61860_loop()
 {
+	// EXPERIMENTAL FIX (see PC1360_DEBUG_STATUS.md, "root cause of the
+	// silent-reset found" thread): the original code below called POP()
+	// (m_r++) on every CONTINUING iteration, not just the terminal one.
+	// Since the byte being decremented is READ_RAM(m_r)/WRITE_RAM(m_r,...)
+	// -- i.e. whatever is at the CURRENT internal-RAM stack pointer -- that
+	// extra POP meant LOOP only ever touched the byte a preceding PUSH set
+	// up on its very first iteration; every iteration after that decremented
+	// a DIFFERENT, adjacent stack byte (walking upward/outward one byte per
+	// iteration) until it happened to find one that was already zero. On
+	// pc1360 (confirmed live, this session: a PUSH+LOOP delay/copy idiom at
+	// ROM address 0x53D0-0x53D7, part of pc1360-exclusive banked ROM) this
+	// walk goes far enough to overrun a live, pending CALL return address,
+	// decrementing both its bytes into garbage before the walk happens to
+	// find a genuine zero further out -- producing exactly the corrupted-
+	// stack silent CPU reset this whole investigation was chasing. Verified
+	// via the user's own real MAME trace that pc1350 executes LOOP zero
+	// times during ordinary use, and this session additionally confirmed
+	// zero LOOP executions during a substantial (300k-500k instruction)
+	// boot+idle run on pc1251/pc1401/pc1403/pc1403h too -- so this opcode's
+	// "walk the stack" behavior appears to be exercised by pc1360-exclusive
+	// ROM content only, not by any other SC61860 machine's ordinary
+	// operation, making this a low-regression-risk place to fix.
+	//
+	// This rewrite makes LOOP decrement the SAME byte (wherever R happens to
+	// point when the instruction starts) on every CONTINUING iteration,
+	// leaving R itself unchanged while the loop is still running -- the
+	// conventional semantics for a "PUSH counter; LOOP" idiom. The pushed
+	// counter byte is popped exactly once, when the loop is about to
+	// terminate (t wraps to 0xff), so the net stack effect across the whole
+	// loop matches a single balanced PUSH+POP pair -- restoring R to
+	// whatever it was *before* the counter was pushed, which is what the
+	// ROM's very next instruction (an unadorned RTN with no explicit
+	// cleanup POP of its own, at pc1360 ROM address 0x53D7) needs to read a
+	// correct return address. (An earlier version of this fix removed the
+	// POP entirely, leaving R parked on the spent counter forever; that
+	// stopped the reset-to-0x0000 crash but left the counter byte for the
+	// next RTN to misread as part of its return address instead --
+	// confirmed live: execution wandered into unmapped memory at 0xFC0Bh
+	// and climbed. Popping once on termination is what actually balances
+	// the stack.) UNVERIFIED against real SC61860 hardware documentation --
+	// if a real opcode reference ever turns up describing genuine
+	// "advance/pop as you go" semantics as intentional, revert to the
+	// original version above.
+	uint8_t r0 = m_r;
 	uint16_t adr = m_pc - READ_OP_ARG();
-	uint8_t t = READ_RAM(m_r) - 1;
-	WRITE_RAM(m_r, t);
+	uint8_t t = READ_RAM(r0) - 1;
+	WRITE_RAM(r0, t);
 	m_zero=t==0;
 	m_carry=t==0xff;
 	if (!m_carry) {
 		m_pc=adr;
-		adr=POP();
 		m_icount-=3;
+	} else {
+		POP();
 	}
 }
 
@@ -696,17 +741,46 @@ void sc61860_device::sc61860_copy_ext(int count)
 void sc61860_device::sc61860_copy_int(int count)
 {
 	int i;
+	// EXPERIMENTAL FIX (see PC1360_DEBUG_STATUS.md, "boot-time RAM-CLEAR
+	// prompt shows only K. Y" thread): the original code below re-read
+	// register A via READ_RAM(A) to compute the auto-incremented source
+	// pointer -- but if the destination P register aliases A (or B), that
+	// read sees the byte *this same iteration just wrote* there via
+	// WRITE_RAM(m_p, t), not the original pointer. The PC-1360 ROM
+	// deliberately exploits P==2 (the A register's own internal-RAM
+	// offset) as an idiom to fetch a fresh 2-byte pointer directly into
+	// A,B (used for at least one message-selector vector table located at
+	// 0x4e50 in bank 3) -- under the original code this makes 5 of that
+	// table's 10 real entries collapse to one identical (wrong, mid-string)
+	// resolved pointer 0x4f37, independently confirmed via live tracing to
+	// be exactly the pointer that produces the truncated "K. Y"/"K. ?" boot
+	// text. This rewrite tracks the source address in a local variable
+	// instead of re-deriving it from A/B, and only writes the
+	// auto-incremented address back into A and/or B when this iteration's
+	// destination write didn't already claim that specific register --
+	// this leaves the normal (non-aliased) auto-increment side effect used
+	// elsewhere in the ROM completely unchanged (verified: the per-character
+	// print loop uses count=0 with P pointed at a different register, never
+	// touching this path), while letting the aliased 2-byte pointer-fetch
+	// idiom land both fetched bytes cleanly into A,B. With this change all
+	// 10 entries of the 0x4e50 table resolve to 10 distinct, valid-looking
+	// ROM strings instead of 2 degenerate ones -- strong evidence this is
+	// the right fix, but UNVERIFIED against real hardware; this touches
+	// the shared sc61860 core used by pc1350/pc1401/pc1251/pc1403 too, so
+	// if this turns out to be wrong, revert this function to the simple
+	// re-read-A/B version above.
+	uint16_t addr = READ_RAM(A) | (READ_RAM(B) << 8);
 	for (i=0; i<=count; i++) {
-		uint8_t t = READ_BYTE((READ_RAM(A)|(READ_RAM(B)<<8))); /* internal rom! */
+		uint8_t t = READ_BYTE(addr); /* internal rom! */
+		int dest = m_p;
 		WRITE_RAM(m_p, t);
 		m_p++;
 		if (i!=count) {
-			t = READ_RAM(A) + 1;
-			WRITE_RAM(A, t);
-			if (t==0) {
-				t = READ_RAM(B) + 1;
-				WRITE_RAM(B, t);
-			}
+			addr = (addr + 1) & 0xffff;
+			if (dest != A)
+				WRITE_RAM(A, addr & 0xff);
+			if (dest != B)
+				WRITE_RAM(B, (addr >> 8) & 0xff);
 		}
 		m_icount-=4;
 	}

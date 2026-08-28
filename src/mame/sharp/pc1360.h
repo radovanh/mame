@@ -117,25 +117,13 @@ public:
 protected:
 	virtual void machine_start() override ATTR_COLD;
 
-	// Auto-presses the Y key (KEY6, row 6) a short while after boot, so the
-	// "confirm RAM clear" prompt the real ROM shows at every cold start (see
-	// in_a_r() in pc1360_m.cpp) gets accepted without the user needing to
-	// hold Y themselves. Empirically (headless testing, see pc1360_m.cpp)
-	// Y must NOT already read as pressed in the first fraction of a second
-	// after reset -- the ROM appears to require seeing a genuine
-	// released->pressed transition, and ignores Y forever if it looks stuck
-	// down from the very first read (sensible real-keyboard-debounce
-	// behaviour, and it also matches how a human naturally presses Y only
-	// after noticing the prompt, not before). So this is done in two timed
-	// phases, both driven by the same m_fakey_timer/fakey_timer_tick():
-	// phase 0 leaves m_fakey (and so the emulated Y line) released for an
-	// initial delay, then flips it to pressed for a further window, then
-	// releases it again so Y behaves like a normal key for the rest of the
-	// session.
-	TIMER_CALLBACK_MEMBER(fakey_timer_tick);
-	emu_timer *m_fakey_timer = nullptr;
-	bool m_fakey = false;
-	u8 m_fakey_phase = 0;
+	// REMOVED (per user request): this used to auto-press the Y key (KEY6,
+	// row 6) a short while after boot to accept the "confirm RAM clear"
+	// prompt automatically. The user now wants to press Y themselves like on
+	// real hardware, so the m_fakey/m_fakey_phase/m_fakey_timer machinery
+	// and fakey_timer_tick() were removed -- in_a_r() no longer special-cases
+	// row 6 at all; it's read like any other real keyboard row now. See
+	// PC1360_DEBUG_STATUS.md for the removal note.
 
 	uint32_t screen_update(screen_device &screen, bitmap_ind16 &bitmap, const rectangle &cliprect);
 

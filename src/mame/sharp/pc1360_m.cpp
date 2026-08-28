@@ -54,34 +54,24 @@ uint8_t pc1360_state::in_a_r()
 	// (KEY7-10 below) are unaffected -- PA truly is per-bit (the service
 	// manual's IA1-IA8 are individual physical lines), so that part of the
 	// original logic was already correct.
+	// NOTE: an earlier session hypothesized that this row-5 self-test
+	// (0x4189-0x41ac, comparing the readback against a hardcoded 0x55) was
+	// the cause of the boot-time "RAM CARD S1 CLEAR O.K. ?" prompt showing
+	// only its last 4 characters ("K. Y"/"K. ?"). That was tested directly
+	// (forcing row 5 to read 0x55) and DISPROVEN -- it diverts the ROM into
+	// a hidden factory/service menu instead of normal BASIC boot, so
+	// self-test FAILURE (the plain behavior below) is the normal, intended
+	// path. The real cause was a separate bug in the sc61860 core's DATA
+	// opcode (sc61860_copy_int() in scops.hxx) -- see PC1360_DEBUG_STATUS.md.
 	if (t >= 1 && t <= 7)
 		data |= m_keys[t - 1]->read();
 
-	// Auto-accept the boot-time "confirm RAM clear" prompt (see the CONFIRMED
-	// comment above) by faking a Y press a short while after reset, so the
-	// machine reaches BASIC without the user needing to hold Y themselves.
-	// Gated tightly on t==7 (row 6, Y's actual row) rather than on an
-	// output-port bit -- unlike the old fake-CLS hack this replaced (see the
-	// machine_start()-adjacent history in this file), this can't fire during
-	// an unrelated read, since it only ever applies while the ROM is
-	// genuinely strobing row 6 itself. m_fakey itself is sequenced by
-	// fakey_timer_tick()/machine_start() -- see the comment on m_fakey in
-	// pc1360.h for why this can't just be "true from t=0 for a few seconds":
-	// empirically (headless MAME testing, holding/releasing the real KEY6
-	// ioport field at different frame counts across many runs, with clean
-	// nvram each time) the ROM ignores Y entirely if it already reads as
-	// pressed in the first fraction of a second after reset -- it needs to
-	// see a released->pressed transition, not just a held level. An initial
-	// run of this feature that set m_fakey = true from machine_start()
-	// onward (turning it off again after 4s) reproduced that exact failure
-	// (bank register stuck at 3, VRAM stuck at its pre-boot content) even
-	// though the injected bit was verified (via temporary logging) to be
-	// firing on every single row-6 read throughout the window -- switching
-	// to a released-then-pressed sequence fixed it (confirmed: bank register
-	// reaches 0, VRAM gets a large new content block, matching a real,
-	// manually-timed Y press).
-	if (t == 7 && m_fakey)
-		data |= 0x40; // KEY6 bit 0x40 = "Y"
+	// REMOVED (per user request): this used to auto-press Y (KEY6, row 6,
+	// bit 0x40) a short while after reset to accept the boot-time "confirm
+	// RAM clear" prompt automatically, via m_fakey/fakey_timer_tick(). The
+	// user wants to press Y themselves like on real hardware, so that's
+	// gone -- row 6 is now read purely from the real KEY6 ioport, same as
+	// every other row above.
 
 	// FIXME: only bits 0-3 of PA are wired to a key port here (KEY7-KEY10),
 	// but direct instrumentation of m_outa during normal ROM execution (see
@@ -249,55 +239,11 @@ void pc1360_state::keyboard_line_w(offs_t offset, uint8_t data)
 	LOGMASKED(LOG_KEYSTB, "pc1360 keyboard_line_w %.4x <- %.2x\n", 0x3e00 + offset, data);
 }
 
-TIMER_CALLBACK_MEMBER(pc1360_state::fakey_timer_tick)
-{
-	if (m_fakey_phase == 0)
-	{
-		// Phase 0 -> 1: "press" Y now. m_fakey has been false (Y reads as
-		// released) since reset, so the ROM sees a genuine release->press
-		// transition here rather than Y appearing permanently stuck down --
-		// see the long comment on this in in_a_r() for why that distinction
-		// turned out to matter.
-		m_fakey = true;
-		m_fakey_phase = 1;
-		m_fakey_timer->adjust(attotime::from_seconds(4));
-	}
-	else
-	{
-		// Phase 1 -> 2: release Y again, so it behaves like any other key
-		// for the rest of the session instead of reading as permanently
-		// held down (which would otherwise block real Y input, e.g. typing
-		// an actual "Y" in BASIC, forever after boot).
-		m_fakey = false;
-	}
-}
-
 void pc1360_state::machine_start()
 {
 	pocketc_state::machine_start();
 
 	membank("bank1")->set_base(memregion("user1")->base());
-
-	// See in_a_r(): auto-accepts the boot-time confirm prompt. Two-phase
-	// timing chosen empirically (headless MAME testing, holding/releasing
-	// the real KEY6 Y ioport field at many different frame counts, clean
-	// nvram each run):
-	//   - Phase 0 (released) lasts 1.5s. This must be long enough for the
-	//     ROM to have started up and be actively polling row 6 -- an edge
-	//     delivered too early (before ~0.25s in sandbox testing) is missed
-	//     entirely, so 1.5s leaves generous margin over that observed
-	//     minimum. It must also not be so long that a real user trying to
-	//     press Y themselves during this window would find it overridden --
-	//     1.5s is well under the several-seconds humans took in practice.
-	//   - Phase 1 (pressed) lasts a further 4s. The real scan loop that
-	//     tests row 6 runs continuously, and in sandbox testing the prompt
-	//     was reliably reached and accepted within a few hundred
-	//     milliseconds of the press; 4s leaves ample margin.
-	//   - Phase 2 (released) is permanent, so Y works normally afterward.
-	m_fakey = false;
-	m_fakey_phase = 0;
-	m_fakey_timer = timer_alloc(FUNC(pc1360_state::fakey_timer_tick), this);
-	m_fakey_timer->adjust(attotime::from_double(1.5));
 
 	address_space &space = m_maincpu->space(AS_PROGRAM);
 
