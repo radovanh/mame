@@ -129,6 +129,24 @@ void pc1251_state::pc1260_mem(address_map &map)
 {
 	map(0x0000, 0x1fff).rom();
 	map(0x2000, 0x20ff).rw(FUNC(pc1251_state::lcd_read), FUNC(pc1251_state::lcd_write));
+	// Per the Ditze "PC-1261/1260 ML & System Info" Systemhandbuch (p.6-7 of
+	// the scanned original -- confirmed visually, not just via OCR),
+	// 0x2800-0x28ff is "Anzeige-RAM 2" (display RAM 2, decoded only to
+	// 0x28bf on real hardware): Anzeige-Speicher 3/4 (0x2800-283b/
+	// 0x2840-287b), the reserve-memory start pointer -1 (0x283e/0x283f), and
+	// RND scratch (0x28b9-0x28bf). This driver previously left it entirely
+	// unmapped. Confirmed via sandbox testing: with real memory mapped here,
+	// the ROM's own cold-boot init immediately writes into exactly this
+	// region (283e/283f and 28b9-28bf, matching the documented pointer/RND
+	// areas byte-for-byte); the classify/dispatch routine hit while
+	// evaluating BASIC expressions (e.g. immediate-mode "1+1") reads/writes
+	// 0x284e/0x284f, inside Anzeige-Speicher 4 -- user-confirmed this cleared
+	// the PC-1260 ERROR 1 bug on arithmetic. Originally mapped as plain RAM
+	// (the immediate issue was lost/zeroed values, not rendering), now routed
+	// through lcd2_read/lcd2_write instead so pc1260_state::screen_update()
+	// can actually draw the second display line this region backs -- see
+	// that function's comment for the corresponding draw loop.
+	map(0x2800, 0x28ff).rw(FUNC(pc1251_state::lcd2_read), FUNC(pc1251_state::lcd2_write));
 	map(0x5800, 0x67ff).ram(); // 4KB RAM
 	map(0x8000, 0xffff).rom();
 }
@@ -137,6 +155,13 @@ void pc1251_state::pc1261_mem(address_map &map)
 {
 	map(0x0000, 0x1fff).rom();
 	map(0x2000, 0x20ff).rw(FUNC(pc1251_state::lcd_read), FUNC(pc1251_state::lcd_write));
+	// See the matching comment in pc1260_mem() -- same "Anzeige-RAM 2"
+	// window per the Ditze Systemhandbuch, applies identically to
+	// pc1261/pc1262 (not independently re-verified against a pc1261-specific
+	// cold-boot trace this session, but the same ROM content and the same
+	// documented hardware memory map apply to both). Also now routed through
+	// lcd2_read/lcd2_write for second-line rendering, same as pc1260_mem().
+	map(0x2800, 0x28ff).rw(FUNC(pc1251_state::lcd2_read), FUNC(pc1251_state::lcd2_write));
 	map(0x4000, 0x67ff).ram(); // 10KB RAM
 	map(0x8000, 0xffff).rom();
 }
@@ -574,6 +599,18 @@ static INPUT_PORTS_START( pc1251 )
 	PORT_START("EXTRA")
 	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("BRK   ON") PORT_CODE(KEYCODE_F4)
 	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("Reset") PORT_CODE(KEYCODE_F3)
+	// Cycles the "MODE" dip switch below (Off -> On/RUN -> On/PRO -> On/RSV
+	// -> Off -> ...) live, with no reset needed -- see pc1260_state::
+	// screen_update()'s comment on the RUN/PRO/RSV indicator for why this
+	// exists: that switch has no MAME "assign any key" binding available
+	// (DIP switches are a separate input class from the one the general
+	// Input(this system) key-remap menu covers -- confirmed by reading the
+	// UI source, not a guess), so this key is the only way to flip it
+	// without opening the dedicated Dip Switches menu each time. Bit 0x04
+	// here is a plain digital key read directly in screen_update(), not
+	// wired into brk_r()/reset_r() -- unlike bits 0x01/0x02 above it isn't
+	// itself a real PC-1260/1261 key, just a MAME-side convenience.
+	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("Cycle RUN/PRO/RSV switch") PORT_CODE(KEYCODE_F2)
 
 	PORT_START("MODE")
 	PORT_DIPNAME( 0x07, 0x00, "Mode")
@@ -948,12 +985,53 @@ static const gfx_layout pc1251_charlayout =
 	1*8
 };
 
+static const gfx_layout pc1260_charlayout =
+{
+	/* PC-1260/1261-specific: same 3px-wide column stretch as
+	   pc1251_charlayout above, but only a 2x (not 3x) vertical stretch of
+	   the same 7 significant source bits -- pc1251_charlayout's 21px-tall
+	   glyphs are sized for PC-1250/1251's single big display line; on
+	   PC-1260/1261's much shorter 2-line-plus-indicator-row glass, two 21px
+	   rows plus the required 2px gap between them already fill the entire
+	   ~45px glass content height on their own, leaving no room at all for
+	   the BUSY/PRINT/DEG/RAD/GRAD indicator row that has to sit below them
+	   in the same glass. Shrinking to 14px-tall rows frees enough height
+	   for that row while keeping the 24-column layout's character width
+	   (and therefore legibility) close to unchanged -- see
+	   pc1260_state::screen_update()'s own layout comment for the resulting
+	   measurements. Used only by pc1260_state::pc1260() (and pc1261, which
+	   shares it); every other machine in this file keeps pc1251_charlayout
+	   untouched. */
+	3,14,
+	128,
+	1,                      /* 1 bits per pixel */
+	{ 0, },                  /* no bitplanes; 1 bit per pixel */
+	/* x offsets */
+	{ 0,0,0 },
+	/* y offsets -- same 7 source bits as pc1251_charlayout, doubled
+	   instead of tripled */
+	{
+		7, 7,
+		6, 6,
+		5, 5,
+		4, 4,
+		3, 3,
+		2, 2,
+		1, 1
+	},
+	1*8
+};
+
 static GFXDECODE_START( gfx_pc1401 )
 	GFXDECODE_ENTRY( "gfx1", 0x0000, pc1401_charlayout, 0, 8 )
 GFXDECODE_END
 
 static GFXDECODE_START( gfx_pc1251 )
 	GFXDECODE_ENTRY( "gfx1", 0x0000, pc1251_charlayout, 0, 8 )
+GFXDECODE_END
+
+static GFXDECODE_START( gfx_pc1260 )
+	GFXDECODE_ENTRY( "gfx1", 0x0000, pc1260_charlayout, 0, 8 )
 GFXDECODE_END
 
 void pocketc_state::pocketc_base(machine_config &config)
@@ -1035,6 +1113,15 @@ void pc1260_state::pc1260(machine_config &config)
 {
 	pc1250(config);
 	m_maincpu->set_addrmap(AS_PROGRAM, &pc1260_state::pc1260_mem);
+	// pc1250(config) above binds pc1251_state::screen_update and
+	// gfx_pc1251 by default; override both with PC-1260/1261-specific
+	// versions. screen_update's override is the PRO/RUN/RSV indicator fix
+	// (see pc1260_state::screen_update()'s own comment in pc1251.cpp);
+	// gfx_pc1260's override is the smaller two-line font (see
+	// pc1260_charlayout's own comment above) needed to fit both display
+	// lines and the indicator row into this artwork's much shorter glass.
+	m_screen->set_screen_update(FUNC(pc1260_state::screen_update));
+	m_gfxdecode->set_info(gfx_pc1260);
 }
 
 void pc1260_state::pc1261(machine_config &config)
@@ -1172,7 +1259,23 @@ ROM_START(pc1260)
 	ROM_REGION(0x80,"gfx1",ROMREGION_ERASEFF)
 ROM_END
 
-#define rom_pc1261 rom_pc1260
+// pc1261/pc1262 used to alias pc1260's romset outright (#define rom_pc1261
+// rom_pc1260) -- but the PC-1260 has a single-line LCD while the PC-1261/1262
+// have a two-line LCD, so treating them as literally the same ROM dump was
+// never right, even though (confirmed this session, via SHA1 comparison
+// against a known-good PC-1261 ROM image from the PokecomGO emulator,
+// https://github.com/digihori/pokecom) the two 8K/32K halves currently on
+// file for "pc1260" happen to be byte-identical to that verified PC-1261
+// dump. Splitting the identity out now -- same bytes, distinct file names --
+// means a future PC-1260-specific dump (once one turns up) can replace
+// cpu1260.rom/bas1260.rom without silently changing pc1261/pc1262 out from
+// under it, and vice versa.
+ROM_START(pc1261)
+	ROM_REGION(0x10000,"maincpu",0)
+	ROM_LOAD( "cpu1261.rom", 0x0000, 0x2000, CRC(f46d23d3) SHA1(e00c9194570048185ec8358732adeba151c56b33))
+	ROM_LOAD( "bas1261.rom", 0x8000, 0x8000, CRC(6c7e017d) SHA1(e2ae717438cea59416b0670e2a53989c147fb362))
+	ROM_REGION(0x80,"gfx1",ROMREGION_ERASEFF)
+ROM_END
 
 ROM_START(pc1350)
 	ROM_REGION(0x10000,"maincpu",0)
@@ -1251,7 +1354,7 @@ COMP( 1982, pc1255,   pc1250, 0,      pc1255,  pc1251, pc1251_state, empty_init,
 COMP( 1983, trs80pc3, pc1250, 0,      pc1251,  pc1251, pc1251_state, empty_init, "Tandy Radio Shack", "TRS-80 Pocket Computer PC-3", MACHINE_NO_SOUND)
 
 COMP( 1982, pc1260,   0,      0,      pc1260,  pc1251, pc1260_state, empty_init, "Sharp", "Pocket Computer 1260",      MACHINE_NOT_WORKING  | MACHINE_NO_SOUND )
-COMP( 1982, pc1261,   pc1260, 0,      pc1261,  pc1251, pc1260_state, empty_init, "Sharp", "Pocket Computer 1261/1262", MACHINE_NOT_WORKING  | MACHINE_NO_SOUND)
+COMP( 1982, pc1261,   0,      0,      pc1261,  pc1251, pc1260_state, empty_init, "Sharp", "Pocket Computer 1261/1262", MACHINE_NOT_WORKING  | MACHINE_NO_SOUND)
 
 // pc1261/pc1262
 COMP( 1984, pc1350,   0,      0,      pc1350,  pc1350, pc1350_state, empty_init, "Sharp", "Pocket Computer 1350",      MACHINE_NO_SOUND )
@@ -1261,11 +1364,11 @@ COMP( 198?, pc1450,   0,      0,      pc1350,  pc1350, pc1350_state, empty_init,
 // reusing pc1401's class/machine config/ROM map wholesale (which is wrong --
 // the PC-1360 is its own machine, not a PC-1401 variant). Now stands alone
 // with its own (still unverified/skeleton) driver -- see pc1360.h.
-COMP( 1987, pc1360,   0,      0,      pc1360,  pc1360, pc1360_state, empty_init, "Sharp", "Pocket Computer 1360",      MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
+COMP( 1987, pc1360,   0,      0,      pc1360,  pc1360, pc1360_state, empty_init, "Sharp", "Pocket Computer 1360",      MACHINE_NO_SOUND )
 
 COMP( 1983, pc1401,   0,      0,      pc1401,  pc1401, pc1401_state, empty_init, "Sharp", "Pocket Computer 1401",      MACHINE_NO_SOUND)
 COMP( 1984, pc1402,   pc1401, 0,      pc1402,  pc1401, pc1401_state, empty_init, "Sharp", "Pocket Computer 1402",      MACHINE_NO_SOUND)
 
 // 72kb rom, 32kb ram, cpu? pc1360
 COMP( 1986, pc1403,   0,      0,      pc1403,  pc1403, pc1403_state, empty_init, "Sharp", "Pocket Computer 1403",      MACHINE_NOT_WORKING  | MACHINE_NO_SOUND)
-COMP( 198?, pc1403h,  pc1403, 0,      pc1403h, pc1403, pc1403_state, empty_init, "Sharp", "Pocket Computer 1403H",     MACHINE_NOT_WORKING  | MACHINE_NO_SOUND)
+COMP( 198?, pc1403h,  pc1403, 0,      pc1403h, pc1403, pc1403_state, empty_init, "Sharp", "Pocket Computer 1403H",     MACHINE_NO_SOUND)
