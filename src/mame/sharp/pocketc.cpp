@@ -590,7 +590,7 @@ static INPUT_PORTS_START( pc1251 )
 	// see that function's long comment for why a direct key is needed at
 	// all (dip switches aren't reachable from MAME's general input-remap
 	// menu).
-	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("Cycle RUN/PRO/RSV switch") PORT_CODE(KEYCODE_F2)
+	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("Cycle RUN/PRO/RSV switch") PORT_CODE(KEYCODE_F1)
 
 	PORT_START("MODE")
 	PORT_DIPNAME( 0x07, 0x00, "Mode")
@@ -865,7 +865,10 @@ static INPUT_PORTS_START( pc1360 )
 	// needed, unlike DEL. This is a genuinely different electrical position
 	// from KEY7 0x08, which is DEL (see below) -- the two are independent
 	// keys, not aliases of each other.
-	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("MODE") PORT_CODE(KEYCODE_PAUSE)
+	// Rebound from PAUSE to F1, per user request, for consistency with the
+	// "MODE"/"Cycle RUN/PRO/RSV switch" keys on the other pocket-computer
+	// drivers in this file (all now F1).
+	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("MODE") PORT_CODE(KEYCODE_F1)
 	// CONFIRMED (headless bit-sweep/screenshot testing, independently
 	// reconfirmed by the user's own artwork remap -- see the block comment
 	// above INPUT_PORTS_START(pc1360)): this bit, originally labelled INS,
@@ -1337,7 +1340,7 @@ COMP( 198?, pc1450,   0,      0,      pc1350,  pc1350, pc1350_state, empty_init,
 // reusing pc1401's class/machine config/ROM map wholesale (which is wrong --
 // the PC-1360 is its own machine, not a PC-1401 variant). Now stands alone
 // with its own (still unverified/skeleton) driver -- see pc1360.h.
-COMP( 1987, pc1360,   0,      0,      pc1360,  pc1360, pc1360_state, empty_init, "Sharp", "Pocket Computer 1360",      MACHINE_NOT_WORKING | MACHINE_NO_SOUND )
+COMP( 1987, pc1360,   0,      0,      pc1360,  pc1360, pc1360_state, empty_init, "Sharp", "Pocket Computer 1360",      MACHINE_NO_SOUND )
 
 COMP( 1983, pc1401,   0,      0,      pc1401,  pc1401, pc1401_state, empty_init, "Sharp", "Pocket Computer 1401",      MACHINE_NO_SOUND)
 COMP( 1984, pc1402,   pc1401, 0,      pc1402,  pc1401, pc1401_state, empty_init, "Sharp", "Pocket Computer 1402",      MACHINE_NO_SOUND)

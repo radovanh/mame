@@ -813,9 +813,13 @@ attotime natural_keyboard::choose_delay(char32_t ch)
 	// short for this driver's debounce/scan logic to reliably register a
 	// posted key, dropping/garbling pasted characters. Doubled, scoped to
 	// this system only (not the whole natural-keyboard engine), so every
-	// other driver keeps the stock timing.
+	// other driver keeps the stock timing. PC-1260/1261 (same shared
+	// pc1251_state keyboard-scan code as PC-1350's own family, just a
+	// different memory map) hit the identical symptom -- user-reported
+	// dropped characters when pasting -- so given the doubled delay, not
+	// re-guessed.
 	std::string_view const sysname(machine().system().name);
-	if (sysname == "pc1350")
+	if (sysname == "pc1350" || sysname == "pc1260" || sysname == "pc1261")
 		return attotime::from_msec((ch == '\r') ? 400 : 200);
 
 	// otherwise, default to constant delay with a longer delay on CR
