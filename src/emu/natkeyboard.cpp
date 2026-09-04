@@ -808,6 +808,16 @@ attotime natural_keyboard::choose_delay(char32_t ch)
 	if (!m_queue_chars.isnull())
 		return attotime::from_msec(10);
 
+	// PC-1350's polled keyboard scan (pocketc.cpp/pocketc_m.cpp) runs at
+	// 20Hz, and the stock 50ms hold is exactly one scan period -- too
+	// short for this driver's debounce/scan logic to reliably register a
+	// posted key, dropping/garbling pasted characters. Doubled, scoped to
+	// this system only (not the whole natural-keyboard engine), so every
+	// other driver keeps the stock timing.
+	std::string_view const sysname(machine().system().name);
+	if (sysname == "pc1350")
+		return attotime::from_msec((ch == '\r') ? 400 : 200);
+
 	// otherwise, default to constant delay with a longer delay on CR
 	return attotime::from_msec((ch == '\r') ? 200 : 50);
 }
