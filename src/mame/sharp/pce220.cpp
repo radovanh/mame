@@ -25,8 +25,10 @@
 #include "emu.h"
 
 #include "pce220_ser.h"
+#include "pocketc_bas.h"
 
 #include "cpu/z80/z80.h"
+#include "imagedev/snapquik.h"
 #include "machine/input_merger.h"
 #include "machine/nvram.h"
 #include "machine/ram.h"
@@ -170,6 +172,23 @@ public:
 		{ }
 
 	void pcg850v(machine_config &config);
+
+	// QUICKLOAD callback for the "quikload" file-manager slot added in
+	// pcg850v() below -- tokenizes a plain-text .BAS file (native C++ port
+	// of POCKTOOL's bas2img, see pocketc_bas.h/.cpp, model::PCG) and
+	// injects it directly into the live BASIC-editor buffer, bypassing
+	// real 11-pin serial emulation (pce220_ser.cpp) entirely. See
+	// claude/pc1360-basic-tokenizer-format.md in the project for the full
+	// PC-G850(V) file-storage-area research this is built on (RAM-disk
+	// catalog format, per-entry size field, and the live TEXT/BASIC
+	// editor buffers that follow it) -- including the open caveats this
+	// implementation works around defensively rather than resolving. See
+	// the long comment above the function body in pce220.cpp for the
+	// specific unverified assumption this callback makes. Public for the
+	// same reason equivalent callbacks are public on pc1350_state/
+	// pc1360_state: the device config code that binds it via FUNC(...)
+	// below isn't a member of this class.
+	std::pair<std::error_condition, std::string> quickload_cb(snapshot_image_device &image);
 
 protected:
 	virtual void machine_start() override ATTR_COLD;
@@ -886,6 +905,142 @@ void pcg850v_state::machine_reset()
 	m_g850v_bank_num = 0;
 }
 
+/*
+ * QUICKLOAD_LOAD_MEMBER(pcg850v_state, quickload_cb)
+ * ---------------------------------------------------------------------
+ * Loads a plain-text .BAS file selected via MAME's quickload file
+ * manager, tokenizes it natively (pocketc_bas::tokenize_program(),
+ * model::PCG), and writes the result directly into the live BASIC-editor
+ * buffer -- the direct-memory-injection alternative to real 11-pin
+ * serial emulation, mechanizing the hand-verified layout documented in
+ * claude/pc1360-basic-tokenizer-format.md (the "PC-G850(V) BASIC
+ * program-pointer address" section and everything below it).
+ *
+ * Unlike PC-1350/PC-1360, the PC-G850(V) has no simple fixed
+ * program-start/end pointer pair. What real hardware testing (three
+ * separate save/dump rounds against a real ROM) established instead:
+ *
+ *   - `w@7FFE` holds a pointer to a small fixed header (its own size is
+ *     recorded as a byte at header+0x13, confirmed 0x19/25 in every
+ *     session so far).
+ *   - Right after the header sits a RAM-disk "catalog" of saved files:
+ *     each entry is a fixed 34-byte FCB-like record (1 status byte,
+ *     0xFB when occupied; 8-byte space-padded name; 3-byte extension;
+ *     5 reserved bytes; 1 "entry size" byte = 34 + this file's data
+ *     length, confirmed exact for both a 1-line and a 3-line real save;
+ *     16 more reserved bytes) immediately followed by that file's raw
+ *     data (2-byte line number + 1-byte length + content, repeated, no
+ *     leading 0xFF of its own -- the previous entry's size field is
+ *     what locates it). Walking `entry_start + size_field` from the
+ *     first entry, while the status byte reads 0xFB, reaches the end of
+ *     the catalog (a non-0xFB status byte, in every real dump seen so
+ *     far because that next byte is actually the leading 0xFF below,
+ *     never an actual empty-slot marker -- distinguishing those two
+ *     cases hasn't come up yet).
+ *   - Immediately after the catalog: the live TEXT-editor buffer, then
+ *     the live BASIC-editor buffer, each in the plain
+ *     leading-0xFF/line-records/trailing-0xFF format seen everywhere
+ *     else in this pocketc family, and confirmed to always be the very
+ *     end of the used region (nothing meaningful follows the BASIC
+ *     buffer's trailing 0xFF).
+ *
+ * That last point is what makes overwriting the BASIC buffer in place
+ * safe without needing to shift anything else in memory: it's always
+ * the last thing there, so a different-sized replacement can't clobber
+ * unrelated data the way it would if the TEXT buffer were the target
+ * (TEXT is followed by BASIC, so replacing it would require relocating
+ * BASIC too -- deliberately not implemented here; only .bas loading is
+ * wired up below).
+ *
+ * ONE IMPORTANT ASSUMPTION IS NOT YET INDEPENDENTLY VERIFIED: everything
+ * above was reverse-engineered by reading memory the real ROM had
+ * already written (via its own SAVE command). This callback assumes the
+ * ROM *relocates* the BASIC buffer by walking the catalog fresh every
+ * time it needs to find it, the same way this function does, rather
+ * than caching its address in some other fixed register this
+ * investigation hasn't found. If such a cached pointer exists and this
+ * callback doesn't update it, LIST/RUN on the real device could
+ * misbehave after a quickload even though the bytes written here are
+ * correct. This needs a real-hardware test to confirm either way: load
+ * a .bas file this way, then check LIST/RUN behave normally.
+ *
+ * Defensive throughout, matching pc1350_m.cpp/pc1360_m.cpp's style: if
+ * any expected sentinel/structure isn't where this model predicts, the
+ * load is refused with a diagnostic rather than guessing and risking
+ * silent corruption.
+ */
+std::pair<std::error_condition, std::string> pcg850v_state::quickload_cb(snapshot_image_device &image)
+{
+	uint64_t size = image.length();
+	std::vector<char> text(size);
+	if (size > 0 && image.fread(text.data(), size) != size)
+		return std::make_pair(std::errc::io_error, std::string("Error reading file"));
+
+	std::vector<uint8_t> tokenized;
+	std::string error;
+	if (!pocketc_bas::tokenize_program(pocketc_bas::model::PCG, std::string(text.data(), size), tokenized, error))
+		return std::make_pair(std::errc::invalid_argument, error);
+
+	address_space &space = m_maincpu->space(AS_PROGRAM);
+
+	// Low RAM window confirmed identity-mapped to the RAM device's own
+	// buffer (see pce220_mem(): 0x0000-0x7fff is bankrw over ram+0x0000,
+	// bank 0 selected by default) -- everything this callback reads or
+	// writes stays within it.
+	constexpr uint32_t RAM_WINDOW_END = 0x8000;
+
+	uint32_t header_base = space.read_byte(0x7ffe) | (space.read_byte(0x7fff) << 8);
+	if (header_base == 0 || header_base >= RAM_WINDOW_END)
+		return std::make_pair(std::errc::io_error,
+			util::string_format("Catalog pointer at 0x7FFE (%04X) is outside the RAM window -- refusing to guess", header_base));
+
+	constexpr uint32_t HEADER_SIZE_FIELD_OFFSET = 0x12;
+	uint32_t ptr = header_base + space.read_byte(header_base + HEADER_SIZE_FIELD_OFFSET);
+
+	// Walk the RAM-disk catalog: [1 status][8 name][3 ext][5 reserved]
+	// [1 size][16 reserved], stride = the size byte, while occupied.
+	constexpr uint8_t FCB_STATUS_OCCUPIED = 0xfb;
+	constexpr uint32_t FCB_SIZE_FIELD_OFFSET = 17;
+	for (int guard = 0; guard < 64 && ptr < RAM_WINDOW_END && space.read_byte(ptr) == FCB_STATUS_OCCUPIED; guard++)
+	{
+		uint8_t entry_size = space.read_byte(ptr + FCB_SIZE_FIELD_OFFSET);
+		if (entry_size == 0)
+			break; // corrupt/zero stride -- stop rather than loop forever
+		ptr += entry_size;
+	}
+
+	// ptr should now be the TEXT-editor buffer's leading 0xFF sentinel.
+	auto skip_bracketed_buffer = [&](uint32_t p) -> uint32_t {
+		p++; // past the leading 0xFF already checked by the caller
+		for (int guard = 0; guard < 256 && p < RAM_WINDOW_END && space.read_byte(p) != 0xff; guard++)
+			p += 3 + space.read_byte(p + 2); // 2-byte line number + 1-byte length + content
+		return p + 1; // past the trailing 0xFF
+	};
+
+	if (ptr >= RAM_WINDOW_END || space.read_byte(ptr) != 0xff)
+		return std::make_pair(std::errc::io_error,
+			util::string_format("Expected the TEXT-area sentinel at %04X but didn't find it -- refusing to guess", ptr));
+
+	uint32_t basic_start = skip_bracketed_buffer(ptr);
+	if (basic_start >= RAM_WINDOW_END || space.read_byte(basic_start) != 0xff)
+		return std::make_pair(std::errc::io_error,
+			util::string_format("Expected the BASIC-area sentinel at %04X but didn't find it -- refusing to guess", basic_start));
+
+	if (basic_start + 1 + tokenized.size() + 1 > RAM_WINDOW_END)
+	{
+		return std::make_pair(std::errc::file_too_large,
+			util::string_format("Tokenized program (%u bytes) does not fit in the %u bytes free from %04X",
+				(unsigned)tokenized.size(), (unsigned)(RAM_WINDOW_END - basic_start - 2), basic_start));
+	}
+
+	space.write_byte(basic_start, 0xff); // leading sentinel
+	for (size_t i = 0; i < tokenized.size(); i++)
+		space.write_byte(basic_start + 1 + i, tokenized[i]);
+	space.write_byte(basic_start + 1 + tokenized.size(), 0xff); // trailing sentinel
+
+	return std::make_pair(std::error_condition(), std::string());
+}
+
 TIMER_DEVICE_CALLBACK_MEMBER(pce220_state::pce220_timer_callback)
 {
 	m_timer_status = 1;
@@ -982,6 +1137,19 @@ void pcg850v_state::pcg850v(machine_config &config)
 	lcdc.set_screen_update_cb(FUNC(pcg850v_state::sed1560_update));
 
 	config.set_default_layout(layout_pcg850v);
+
+	// Direct-memory BASIC-program injection: select a plain-text .BAS
+	// file via the quickload/file-manager UI and it's natively tokenized
+	// (pocketc_bas.cpp, model::PCG) and written into the live BASIC-editor
+	// buffer -- see quickload_cb() above for the full background,
+	// including the one real-hardware-unverified assumption it makes.
+	// Only "bas" is registered (not "txt" too, unlike pc1350()/pc1360()):
+	// overwriting the TEXT buffer safely would also require relocating
+	// the BASIC buffer that always follows it, which isn't implemented
+	// yet. Only wired up for pcg850v() specifically -- pce220()/pcg815()
+	// run different ROM/OS versions whose RAM-disk catalog format hasn't
+	// been independently verified to match.
+	QUICKLOAD(config, "quikload", "bas", attotime::zero).set_load_callback(FUNC(pcg850v_state::quickload_cb));
 }
 
 /* ROM definition */

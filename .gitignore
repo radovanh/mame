@@ -52,4 +52,5 @@ regtests/jedutil/output
 /roms
 /artwork
 /nvram
-/local
+/.local
+Claude outputs

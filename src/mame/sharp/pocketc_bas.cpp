@@ -141,7 +141,12 @@ const keyword pcg_keywords[] = {
 	{ "MEM", 0xFEAF }, { "MOD", 0xFEC6 }, { "MON", 0xFE0F },
 	{ "OUT", 0xFE45 }, { "PAUSE", 0xFE60 }, { "PIOGET", 0xFEA8 },
 	{ "PIOSET", 0xFE48 }, { "PIOPUT", 0xFE49 }, { "RENUM", 0xFE17 },
-	{ "SPOUT", 0xFE4A }, { "SPINP", 0xFE4B },
+	{ "SPOUT", 0xFE4A }, { "SPINP", 0xFE4B }, { "LCOPY", 0xFE1F },
+	// "POIPUT" is the akiyan.com PC-G850S ROM table's spelling for this same
+	// 0xFE49 token (see below) -- kept as a second name alongside "PIOPUT"
+	// since it's unclear which spelling the real ROM keyword scanner
+	// actually accepts; not independently verified either way.
+	{ "POIPUT", 0xFE49 },
 	// Shared with GRP_E (structured-programming extensions)
 	{ "CASE", 0xFE7D }, { "DEFAULT", 0xFE7E }, { "ELSE", 0xFE76 },
 	{ "ENDIF", 0xFE4D }, { "ENDSWITCH", 0xFE7F }, { "FRE", 0xFEAF },

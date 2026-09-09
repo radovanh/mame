@@ -44,11 +44,18 @@
  *    handful of model-specific keywords only relevant to *other* pocketc
  *    models (PC-1401/1403/1421/1470/1475/E500) were intentionally left
  *    out -- only PC-1350, PC-1360, and the PCG (GRP_G) family are
- *    targeted. Within the PCG table, LCOPY was left out entirely (its
- *    source is gated behind an unrelated CLI-option workaround flag with
- *    an undocumented default, so its availability couldn't be confirmed
- *    either way) and MERGE was deliberately excluded to match bas2img,
- *    which explicitly disables it for this model group.
+ *    targeted. Within the PCG table, LCOPY=0xFE1F is now included --
+ *    bas2img itself gates it behind an unrelated CLI-option workaround
+ *    flag with an undocumented default, but a real ROM-derived reference
+ *    table (akiyan.com's PC-G850S intermediate code table) independently
+ *    confirms the value, so it's no longer excluded. MERGE remains
+ *    deliberately excluded to match bas2img, which explicitly disables it
+ *    for this model group (and it doesn't appear in that reference table
+ *    either). The whole PCG table was cross-checked against that same
+ *    141-entry reference table with zero token-value conflicts; the only
+ *    other addition from it is "POIPUT" (0xFE49) as a second name for the
+ *    same token as the existing "PIOPUT" guess -- which spelling the real
+ *    ROM keyword scanner accepts is not independently confirmed.
  *
  ****************************************************************************/
 
