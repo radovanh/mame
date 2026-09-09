@@ -5,7 +5,9 @@
 
 #include "pocketc.h"
 #include "pc1360.h"
+#include "pocketc_bas.h"
 #include "machine/ram.h"
+#include "imagedev/snapquik.h"
 
 #define LOG_BANK    (1U << 1)
 #define LOG_SYSPORT (1U << 2)
@@ -121,6 +123,55 @@ uint8_t pc1360_state::in_a_r()
 uint8_t pc1360_state::in_b_r()
 {
 	return m_outb;
+}
+
+/*
+ * Shift-chord fix for clipboard paste. See the "SHIFT (paste)" phantom
+ * field on the EXTRA port and the comment on KEY0 0x40 SHIFT, both in
+ * pocketc.cpp, for the full background: the PC-1360's real SHIFT key does
+ * not behave like a normal simultaneous-hold modifier -- confirmed by the
+ * user from direct experience with real hardware, and independently
+ * reproduced here via headless bit-sweep/latch testing (a bit-sweep of
+ * every KEY0 bit combined with Q never once registered Q while KEY0 0x40
+ * was simultaneously held, at either 200ms or 350ms per-field delay, ruling
+ * out timing) -- it must be tapped and released before the next key is
+ * pressed, matching the user's own description of a right-hand SHIFT key
+ * that "holds down automatically" once tapped.
+ *
+ * MAME's natural-keyboard engine (natural_keyboard::timer() in
+ * natkeyboard.cpp) only ever implements a simultaneous hold for a
+ * multi-field character: it presses the shift field, then presses the base
+ * field while the shift field is still held, then releases both together.
+ * Rather than changing that generic engine (which every other PORT_CHAR
+ * driver in MAME relies on), this phantom field intercepts just the shift
+ * press for pc1360: it carries PORT_CHAR(UCHAR_SHIFT_1) so natural_keyboard
+ * presses IT (never the real SHIFT key directly) to begin a chord, and its
+ * PORT_CHANGED_MEMBER callback below converts that hold into a real
+ * SHIFT tap-then-release, well before natural_keyboard's own per-field
+ * delay (choose_delay()) presses the base character key afterwards.
+ */
+INPUT_CHANGED_MEMBER(pc1360_state::shift_chord_changed)
+{
+	// Only the phantom field's rising edge matters here -- that's
+	// natural_keyboard beginning a chord. Its later release of this same
+	// phantom field (the falling edge) has no real hardware bit behind it
+	// and needs no action.
+	if (!newval)
+		return;
+
+	// Tap the REAL SHIFT key (KEY0 0x40) on now...
+	m_keys[0]->field(0x40)->set_value(1);
+
+	// ...and release it again shortly afterwards, well before
+	// natural_keyboard presses the base character key (see choose_delay()
+	// in natkeyboard.cpp for pc1360's per-field delay), so the real
+	// hardware never sees the two keys held down together.
+	m_shift_pulse_timer->adjust(attotime::from_msec(150));
+}
+
+TIMER_CALLBACK_MEMBER(pc1360_state::release_shift_pulse)
+{
+	m_keys[0]->field(0x40)->clear_value();
 }
 
 /*
@@ -243,6 +294,10 @@ void pc1360_state::machine_start()
 {
 	pocketc_state::machine_start();
 
+	// Backs shift_chord_changed()/release_shift_pulse() above -- the
+	// clipboard-paste shift-chord fix.
+	m_shift_pulse_timer = timer_alloc(FUNC(pc1360_state::release_shift_pulse), this);
+
 	membank("bank1")->set_base(memregion("user1")->base());
 
 	address_space &space = m_maincpu->space(AS_PROGRAM);
@@ -268,4 +323,72 @@ void pc1360_state::machine_start()
 	// region, i.e. not into the actual RAM at all, a pre-existing quirk in
 	// that older driver), this persists the real RAM-card contents.
 	m_ram_nvram->set_base(m_ram->pointer(), ram_size);
+}
+
+/*
+ * QUICKLOAD_LOAD_MEMBER(pc1360_state, quickload_cb)
+ * ---------------------------------------------------------------------
+ * Loads a plain-text .BAS file selected via MAME's quickload file
+ * manager, tokenizes it natively (pocketc_bas::tokenize_program(),
+ * PC1360 model -- 0xFE-prefixed 2-byte tokens), and writes the result
+ * directly into the program area at &FFD7/&FFD8 -- the direct-memory-
+ * injection alternative to real 11-pin serial emulation explored in
+ * claude/pc1350-pc1360-serial-feasibility.md, proved out by hand via the
+ * MAME debugger first (see claude/pc1360-basic-tokenizer-format.md for
+ * the full worked example this callback mechanizes).
+ *
+ * The leading 0xFF sentinel at the program-start address and the
+ * "end pointer addresses the trailing 0xFF itself" convention are both
+ * confirmed against a real MAME memory dump of a manually-typed program
+ * (see the doc above) -- this callback asserts the leading sentinel
+ * itself rather than trusting it's already there, specifically because
+ * machine_start() above installs RAM but there is still no
+ * machine_reset() override for this driver (unlike pc1350_m.cpp's), so
+ * whether a genuine cold boot alone leaves that byte and the start/end
+ * pointers in a sane state is still an open question -- this makes the
+ * quickload path robust to that regardless of how it's eventually
+ * resolved.
+ */
+std::pair<std::error_condition, std::string> pc1360_state::quickload_cb(snapshot_image_device &image)
+{
+	uint64_t size = image.length();
+	std::vector<char> text(size);
+	if (size > 0 && image.fread(text.data(), size) != size)
+		return std::make_pair(std::errc::io_error, std::string("Error reading file"));
+
+	std::vector<uint8_t> tokenized;
+	std::string error;
+	if (!pocketc_bas::tokenize_program(pocketc_bas::model::PC1360, std::string(text.data(), size), tokenized, error))
+		return std::make_pair(std::errc::invalid_argument, error);
+
+	address_space &space = m_maincpu->space(AS_PROGRAM);
+
+	// Formula confirmed against 3 independent data points (fixed PC-1350
+	// window, PC-1360 "MEM B"/"MEM C" RAM-card windows) -- see the doc.
+	const uint32_t ram_base = 0x10000 - m_ram->size();
+	const uint32_t expected_start = ram_base + 0x30;
+
+	uint32_t start = space.read_byte(0xffd7) | (space.read_byte(0xffd8) << 8);
+	if (start < ram_base || start >= 0x10000)
+		start = expected_start; // cold-boot pointer wasn't sane -- fall back
+
+	if (tokenized.size() > (0xffffU - start))
+	{
+		return std::make_pair(std::errc::file_too_large,
+			util::string_format("Tokenized program (%u bytes) does not fit in the %u bytes free from %04X",
+				(unsigned)tokenized.size(), (unsigned)(0xffffU - start), start));
+	}
+
+	space.write_byte(start, 0xff); // leading sentinel (see doc)
+	for (size_t i = 0; i < tokenized.size(); i++)
+		space.write_byte(start + 1 + i, tokenized[i]);
+
+	const uint32_t end = start + uint32_t(tokenized.size());
+
+	space.write_byte(0xffd7, start & 0xff);
+	space.write_byte(0xffd8, (start >> 8) & 0xff);
+	space.write_byte(0xffd9, end & 0xff);
+	space.write_byte(0xffda, (end >> 8) & 0xff);
+
+	return std::make_pair(std::error_condition(), std::string());
 }

@@ -822,6 +822,32 @@ attotime natural_keyboard::choose_delay(char32_t ch)
 	if (sysname == "pc1350" || sysname == "pc1260" || sysname == "pc1261")
 		return attotime::from_msec((ch == '\r') ? 400 : 200);
 
+	// PC-1360 (own standalone driver, different keyboard-scan code
+	// entirely) hit the same dropped-character symptom once PORT_CHAR
+	// support was added there, so it gets its own tier here rather than
+	// sharing PC-1350/1260/1261's, plain, single-key characters confirmed
+	// fixed by this.
+	//
+	// NOTE: SHIFT-chorded characters (the "!"/'"'/'#'/etc. row) needed a
+	// separate, non-timing fix, not a longer delay here -- confirmed via a
+	// headless bit-sweep that this driver's real keyboard matrix never
+	// registers a second key while its real SHIFT bit is simultaneously
+	// held, at any delay, because (per the user, who has the real
+	// hardware) PC-1360's SHIFT key is tap-to-latch, not hold-to-chord:
+	// tap it, release it, then press the next key alone. MAME's generic
+	// natural-keyboard chording (this timer, driving simultaneous holds)
+	// can't express that, so pc1360.cpp/pc1360_m.cpp instead intercept the
+	// shift press via a phantom EXTRA-port field ("SHIFT (paste)") whose
+	// PORT_CHANGED_MEMBER callback pulses the real SHIFT bit on and back
+	// off well within this delay, before the base character field is
+	// pressed -- see the comment on that field and on
+	// pc1360_state::shift_chord_changed() for the full mechanism. Verified
+	// end-to-end in the sandbox: pasting "!", '"', and back-to-back
+	// SHIFT-chorded sequences (e.g. PRINT"!") all render correctly with
+	// this same 350/700 tier.
+	if (sysname == "pc1360")
+		return attotime::from_msec((ch == '\r') ? 700 : 350);
+
 	// otherwise, default to constant delay with a longer delay on CR
 	return attotime::from_msec((ch == '\r') ? 200 : 50);
 }

@@ -19,6 +19,7 @@
 #include "pc1403.h"
 
 #include "machine/ram.h"
+#include "imagedev/snapquik.h"
 
 /* PC1430 lacks peek/poke operations */
 
@@ -636,7 +637,20 @@ static INPUT_PORTS_START( pc1350 )
 	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME(",") PORT_CODE(KEYCODE_COMMA)  PORT_CHAR(',')
 	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("SML") PORT_CODE(KEYCODE_LCONTROL) PORT_CODE(KEYCODE_RCONTROL)
 	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("DEF") PORT_CODE(KEYCODE_LALT) PORT_CODE(KEYCODE_RALT)
-	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("SHIFT") PORT_CODE(KEYCODE_RSHIFT)   /* are both Shifts connected here? or is Left Shift missing */  PORT_CHAR(UCHAR_SHIFT_1)
+	// NOTE: no PORT_CHAR(UCHAR_SHIFT_1) here anymore -- see the phantom
+	// "SHIFT (paste)" field on the EXTRA port below. Same root cause as
+	// PC-1360 (see the equivalent comment on that driver's KEY0 0x40 SHIFT
+	// field in INPUT_PORTS_START(pc1360) above): the user has confirmed
+	// PC-1350's real keyboard has the identical two-shift-key design (a
+	// simultaneous-hold left SHIFT and a tap-to-latch right SHIFT), and
+	// this driver's own pre-existing comments already hinted at it --
+	// "are both Shifts connected here? or is Left Shift missing" here, and
+	// "// missing lshift" in pc1350_m.cpp's in_a_r() -- this real key
+	// (bound to RSHIFT) is the right, tap-to-latch one. MAME's
+	// natural-keyboard engine only ever implements the simultaneous-hold
+	// style, so pasted SHIFT-chorded characters need the same fix as
+	// PC-1360: see pc1350_state::shift_chord_changed() (pc1350_m.cpp).
+	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("SHIFT") PORT_CODE(KEYCODE_RSHIFT)   /* are both Shifts connected here? or is Left Shift missing */
 
 	PORT_START("KEY1")
 	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("(     <") PORT_CODE(KEYCODE_OPENBRACE)  PORT_CHAR('(')  PORT_CHAR('<')
@@ -726,6 +740,12 @@ static INPUT_PORTS_START( pc1350 )
 	PORT_START("EXTRA")
 	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("BRK   ON") PORT_CODE(KEYCODE_F4)
 	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("SHIFT") PORT_CODE(KEYCODE_LSHIFT) // temporarily here, but not read...
+	// Phantom paste-only SHIFT field -- same mechanism as PC-1360's (see
+	// the "SHIFT (paste)" field in INPUT_PORTS_START(pc1360) above for the
+	// full explanation). Deliberately no PORT_CODE, so it's only ever
+	// driven by natural-keyboard/clipboard paste, never a host key --
+	// live keyboard play on the real SHIFT key (KEY0 0x40) is unaffected.
+	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("SHIFT (paste)") PORT_CHAR(UCHAR_SHIFT_1) PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(pc1350_state::shift_chord_changed), 0)
 
 	PORT_START("DSW0")
 	PORT_DIPNAME( 0x07, 0x07, "Contrast")
@@ -792,55 +812,78 @@ INPUT_PORTS_END
  */
 static INPUT_PORTS_START( pc1360 )
 	PORT_START("KEY0")
-	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME(")     >") PORT_CODE(KEYCODE_CLOSEBRACE)
-	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME(":") PORT_CODE(KEYCODE_COLON)
-	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME(";") PORT_CODE(KEYCODE_QUOTE)
-	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME(",") PORT_CODE(KEYCODE_COMMA)
+	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME(")     >") PORT_CODE(KEYCODE_CLOSEBRACE)  PORT_CHAR(')')  PORT_CHAR('>')
+	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME(":") PORT_CODE(KEYCODE_COLON)  PORT_CHAR(':')
+	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME(";") PORT_CODE(KEYCODE_QUOTE)  PORT_CHAR(';')
+	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME(",") PORT_CODE(KEYCODE_COMMA)  PORT_CHAR(',')
 	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("SML") PORT_CODE(KEYCODE_LCONTROL) PORT_CODE(KEYCODE_RCONTROL)
 	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("DEF") PORT_CODE(KEYCODE_LALT) PORT_CODE(KEYCODE_RALT)
+	// NOTE: no PORT_CHAR(UCHAR_SHIFT_1) here anymore -- see the phantom
+	// "SHIFT (paste)" field on the EXTRA port below for why. Real hardware
+	// has two physically distinct SHIFT behaviors (confirmed by the user
+	// from direct experience with the real device, and independently
+	// reproduced here via headless bit-sweep/latch testing): a
+	// simultaneous-hold chord (this real key, still fine for live host-key
+	// play: hold RSHIFT + the base key together) and a separate tap-to-latch
+	// behavior used for the paste/natural-keyboard path (see below). MAME's
+	// natural-keyboard engine only ever implements the simultaneous-hold
+	// style (natural_keyboard::timer() in natkeyboard.cpp presses the shift
+	// field and the base-char field down together, then releases both
+	// together) -- confirmed by direct experiment that the PC-1360 keyboard
+	// matrix genuinely never registers a second key while this real SHIFT
+	// bit (KEY0 0x40) is simultaneously held: a bit-sweep of KEY0 0x01-0x40
+	// each combined with Q never once produced "!" (or any second-key
+	// effect at all) at either 200ms or 350ms per-field delay, ruling out
+	// timing. A manually-sequenced test -- SHIFT down, SHIFT released,
+	// (gap), Q down, Q released -- DID correctly produce "!", matching the
+	// user's own description of a right-hand SHIFT key that "holds down
+	// automatically" once tapped, letting the next key be pressed alone.
 	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("SHIFT") PORT_CODE(KEYCODE_RSHIFT)
 
 	PORT_START("KEY1")
-	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("(     <") PORT_CODE(KEYCODE_OPENBRACE)
-	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("/") PORT_CODE(KEYCODE_SLASH) PORT_CODE(KEYCODE_SLASH_PAD)
-	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("*") PORT_CODE(KEYCODE_ASTERISK)
-	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("-     ^") PORT_CODE(KEYCODE_MINUS) PORT_CODE(KEYCODE_MINUS_PAD)
-	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("Z") PORT_CODE(KEYCODE_Z)
-	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("A") PORT_CODE(KEYCODE_A)
-	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("Q     !") PORT_CODE(KEYCODE_Q)
+	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("(     <") PORT_CODE(KEYCODE_OPENBRACE)  PORT_CHAR('(')  PORT_CHAR('<')
+	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("/") PORT_CODE(KEYCODE_SLASH) PORT_CODE(KEYCODE_SLASH_PAD)  PORT_CHAR('/')
+	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("*") PORT_CODE(KEYCODE_ASTERISK)  PORT_CHAR('*')
+	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("-     ^") PORT_CODE(KEYCODE_MINUS) PORT_CODE(KEYCODE_MINUS_PAD)  PORT_CHAR('-')  PORT_CHAR('^')
+	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("Z") PORT_CODE(KEYCODE_Z)  PORT_CHAR('Z')
+	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("A") PORT_CODE(KEYCODE_A)  PORT_CHAR('A')
+	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("Q     !") PORT_CODE(KEYCODE_Q)  PORT_CHAR('Q')  PORT_CHAR('!')
 
 	PORT_START("KEY2")
-	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("9") PORT_CODE(KEYCODE_9) PORT_CODE(KEYCODE_9_PAD)
-	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("6") PORT_CODE(KEYCODE_6) PORT_CODE(KEYCODE_6_PAD)
-	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("3") PORT_CODE(KEYCODE_3) PORT_CODE(KEYCODE_3_PAD)
-	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("+") PORT_CODE(KEYCODE_PLUS_PAD)
-	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("X") PORT_CODE(KEYCODE_X)
-	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("S") PORT_CODE(KEYCODE_S)
-	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("W     \"") PORT_CODE(KEYCODE_W)
+	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("9") PORT_CODE(KEYCODE_9) PORT_CODE(KEYCODE_9_PAD)  PORT_CHAR('9')
+	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("6") PORT_CODE(KEYCODE_6) PORT_CODE(KEYCODE_6_PAD)  PORT_CHAR('6')
+	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("3") PORT_CODE(KEYCODE_3) PORT_CODE(KEYCODE_3_PAD)  PORT_CHAR('3')
+	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("+") PORT_CODE(KEYCODE_PLUS_PAD)  PORT_CHAR('+')
+	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("X") PORT_CODE(KEYCODE_X)  PORT_CHAR('X')
+	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("S") PORT_CODE(KEYCODE_S)  PORT_CHAR('S')
+	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("W     \"") PORT_CODE(KEYCODE_W)  PORT_CHAR('W')  PORT_CHAR('"')
 
 	PORT_START("KEY3")
-	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("8") PORT_CODE(KEYCODE_8) PORT_CODE(KEYCODE_8_PAD)
-	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("5") PORT_CODE(KEYCODE_5) PORT_CODE(KEYCODE_5_PAD)
-	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("2") PORT_CODE(KEYCODE_2) PORT_CODE(KEYCODE_2_PAD)
-	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME(".") PORT_CODE(KEYCODE_STOP)
-	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("C") PORT_CODE(KEYCODE_C)
-	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("D") PORT_CODE(KEYCODE_D)
-	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("E     #") PORT_CODE(KEYCODE_E)
+	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("8") PORT_CODE(KEYCODE_8) PORT_CODE(KEYCODE_8_PAD)  PORT_CHAR('8')
+	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("5") PORT_CODE(KEYCODE_5) PORT_CODE(KEYCODE_5_PAD)  PORT_CHAR('5')
+	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("2") PORT_CODE(KEYCODE_2) PORT_CODE(KEYCODE_2_PAD)  PORT_CHAR('2')
+	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME(".") PORT_CODE(KEYCODE_STOP)  PORT_CHAR('.')
+	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("C") PORT_CODE(KEYCODE_C)  PORT_CHAR('C')
+	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("D") PORT_CODE(KEYCODE_D)  PORT_CHAR('D')
+	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("E     #") PORT_CODE(KEYCODE_E)  PORT_CHAR('E')  PORT_CHAR('#')
 
 	PORT_START("KEY4")
-	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("7") PORT_CODE(KEYCODE_7) PORT_CODE(KEYCODE_7_PAD)
-	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("4") PORT_CODE(KEYCODE_4) PORT_CODE(KEYCODE_4_PAD)
-	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("1") PORT_CODE(KEYCODE_1) PORT_CODE(KEYCODE_1_PAD)
-	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("0") PORT_CODE(KEYCODE_0) PORT_CODE(KEYCODE_0_PAD)
-	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("V") PORT_CODE(KEYCODE_V)
-	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("F") PORT_CODE(KEYCODE_F)
-	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("R     $") PORT_CODE(KEYCODE_R)
+	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("7") PORT_CODE(KEYCODE_7) PORT_CODE(KEYCODE_7_PAD)  PORT_CHAR('7')
+	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("4") PORT_CODE(KEYCODE_4) PORT_CODE(KEYCODE_4_PAD)  PORT_CHAR('4')
+	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("1") PORT_CODE(KEYCODE_1) PORT_CODE(KEYCODE_1_PAD)  PORT_CHAR('1')
+	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("0") PORT_CODE(KEYCODE_0) PORT_CODE(KEYCODE_0_PAD)  PORT_CHAR('0')
+	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("V") PORT_CODE(KEYCODE_V)  PORT_CHAR('V')
+	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("F") PORT_CODE(KEYCODE_F)  PORT_CHAR('F')
+	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("R     $") PORT_CODE(KEYCODE_R)  PORT_CHAR('R')  PORT_CHAR('$')
 
 	PORT_START("KEY5")
 	// UP/DOWN confirmed NOT to move the cursor (DOWN instead toggles the
 	// unrelated JAPAN display flag) -- left wired to their original codes
-	// pending further investigation; see the block comment above
-	// INPUT_PORTS_START(pc1360).
+	// pending further investigation, and deliberately given no PORT_CHAR
+	// (see the block comment above INPUT_PORTS_START(pc1360)): pasted text
+	// essentially never contains raw cursor-key codes, so this costs
+	// nothing, and it avoids attaching paste behavior to a key that
+	// doesn't actually do what its label says.
 	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("UP") PORT_CODE(KEYCODE_UP)
 	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("DOWN") PORT_CODE(KEYCODE_DOWN)
 	// CONFIRMED (headless bit-sweep/screenshot testing, independently
@@ -851,9 +894,9 @@ static INPUT_PORTS_START( pc1360 )
 	// Left as IPT_UNUSED since their real function is still unknown.
 	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_UNUSED)
 	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_UNUSED)
-	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("B") PORT_CODE(KEYCODE_B)
-	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("G") PORT_CODE(KEYCODE_G)
-	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("T     %") PORT_CODE(KEYCODE_T)
+	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("B") PORT_CODE(KEYCODE_B)  PORT_CHAR('B')
+	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("G") PORT_CODE(KEYCODE_G)  PORT_CHAR('G')
+	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("T     %") PORT_CODE(KEYCODE_T)  PORT_CHAR('T')  PORT_CHAR('%')
 
 	PORT_START("KEY6")
 	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_UNUSED)
@@ -867,21 +910,25 @@ static INPUT_PORTS_START( pc1360 )
 	// keys, not aliases of each other.
 	// Rebound from PAUSE to F1, per user request, for consistency with the
 	// "MODE"/"Cycle RUN/PRO/RSV switch" keys on the other pocket-computer
-	// drivers in this file (all now F1).
+	// drivers in this file (all now F1). Deliberately no PORT_CHAR -- MODE
+	// is a mode-toggle function key, not a printable character, matching
+	// pc1350's own MODE key (KEY7 0x08 there) which likewise has none.
 	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("MODE") PORT_CODE(KEYCODE_F1)
 	// CONFIRMED (headless bit-sweep/screenshot testing, independently
 	// reconfirmed by the user's own artwork remap -- see the block comment
 	// above INPUT_PORTS_START(pc1360)): this bit, originally labelled INS,
 	// is actually RIGHT. INS's own real electrical position/function is
 	// still unknown, so KEYCODE_INSERT isn't attached to anything below.
-	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("RIGHT") PORT_CODE(KEYCODE_RIGHT)
+	// PORT_CHAR added since this is a confirmed, working cursor key (unlike
+	// KEY5 0x04/0x08 above).
+	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("RIGHT") PORT_CODE(KEYCODE_RIGHT)  PORT_CHAR(UCHAR_MAMEKEY(RIGHT))
 	// CONFIRMED (same testing as RIGHT above): this bit, originally
 	// labelled DEL, is actually LEFT. Real DEL lives at KEY7 0x08 (see
 	// below).
-	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("LEFT") PORT_CODE(KEYCODE_LEFT)
-	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("N") PORT_CODE(KEYCODE_N)
-	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("H") PORT_CODE(KEYCODE_H)
-	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("Y     &") PORT_CODE(KEYCODE_Y)
+	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("LEFT") PORT_CODE(KEYCODE_LEFT)  PORT_CHAR(UCHAR_MAMEKEY(LEFT))
+	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("N") PORT_CODE(KEYCODE_N)  PORT_CHAR('N')
+	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("H") PORT_CODE(KEYCODE_H)  PORT_CHAR('H')
+	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("Y     &") PORT_CODE(KEYCODE_Y)  PORT_CHAR('Y')  PORT_CHAR('&')
 
 	PORT_START("KEY7")
 	PORT_BIT(0x03, IP_ACTIVE_HIGH, IPT_UNUSED)
@@ -890,7 +937,10 @@ static INPUT_PORTS_START( pc1360 )
 	// for the full story): this bit, not KEY8 bit 0x08 as the book's example
 	// program and this row's own bit 0x08 implied, is the one that actually
 	// clears the command line back to the ">" prompt when set. Moved here
-	// from KEY8.
+	// from KEY8. Deliberately no PORT_CHAR -- CLS is a function key, not a
+	// printable character (mirrors pc1350's CLS treatment intent; unlike
+	// pc1350 this key's physical binding is Backspace rather than Escape,
+	// so it isn't given ESC's char code here either).
 	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("CLS   CA") PORT_CODE(KEYCODE_BACKSPACE)
 	// CONFIRMED (headless bit-sweep/screenshot testing, independently
 	// reconfirmed by the user's own artwork remap -- see the block comment
@@ -898,28 +948,30 @@ static INPUT_PORTS_START( pc1360 )
 	// is actually DEL -- it requires an unusually long hold (~5s) to
 	// register. The real MODE key lives at KEY6 0x02 (see above); it's a
 	// genuinely separate key from this one, so KEYCODE_PAUSE now lives
-	// there instead of here.
+	// there instead of here. Deliberately no PORT_CHAR -- DEL's unusually
+	// long required hold makes it a poor match for the natural keyboard's
+	// normal (short) key-hold timing, so it's left keyboard-only for now.
 	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("DEL") PORT_CODE(KEYCODE_DEL)
-	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("M") PORT_CODE(KEYCODE_M)
-	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("J") PORT_CODE(KEYCODE_J)
-	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("U     ?") PORT_CODE(KEYCODE_U)
+	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("M") PORT_CODE(KEYCODE_M)  PORT_CHAR('M')
+	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("J") PORT_CODE(KEYCODE_J)  PORT_CHAR('J')
+	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("U     ?") PORT_CODE(KEYCODE_U)  PORT_CHAR('U')  PORT_CHAR('?')
 
 	PORT_START("KEY8")
 	PORT_BIT(0x0f, IP_ACTIVE_HIGH, IPT_UNUSED)
-	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("SPC") PORT_CODE(KEYCODE_SPACE)
-	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("K") PORT_CODE(KEYCODE_K)
-	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("I     Pi") PORT_CODE(KEYCODE_I)
+	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("SPC") PORT_CODE(KEYCODE_SPACE)  PORT_CHAR(' ')
+	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("K") PORT_CODE(KEYCODE_K)  PORT_CHAR('K')
+	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("I     Pi") PORT_CODE(KEYCODE_I)  PORT_CHAR('I')
 
 	PORT_START("KEY9")
 	PORT_BIT(0x0f, IP_ACTIVE_HIGH, IPT_UNUSED)
-	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("ENTER") PORT_CODE(KEYCODE_ENTER) PORT_CODE(KEYCODE_ENTER_PAD)
-	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("L") PORT_CODE(KEYCODE_L)
-	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("O") PORT_CODE(KEYCODE_O)
+	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("ENTER") PORT_CODE(KEYCODE_ENTER) PORT_CODE(KEYCODE_ENTER_PAD)  PORT_CHAR(13)
+	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("L") PORT_CODE(KEYCODE_L)  PORT_CHAR('L')
+	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("O") PORT_CODE(KEYCODE_O)  PORT_CHAR('O')
 
 	PORT_START("KEY10")
 	PORT_BIT(0x1f, IP_ACTIVE_HIGH, IPT_UNUSED)
-	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("=") PORT_CODE(KEYCODE_EQUALS)
-	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("P     Alpha") PORT_CODE(KEYCODE_P)
+	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("=") PORT_CODE(KEYCODE_EQUALS)  PORT_CHAR('=')
+	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("P     Alpha") PORT_CODE(KEYCODE_P)  PORT_CHAR('P')
 
 	PORT_START("KEY11")
 	PORT_DIPNAME( 0xc0, 0x00, "Power")
@@ -929,6 +981,20 @@ static INPUT_PORTS_START( pc1360 )
 	PORT_START("EXTRA")
 	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("BRK   ON") PORT_CODE(KEYCODE_F4)
 	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("Reset") PORT_CODE(KEYCODE_F3)
+	// Phantom paste-only SHIFT field, decoupled from the real SHIFT key
+	// above (KEY0 0x40). Deliberately no PORT_CODE -- this bit is never
+	// driven by a host key, only by MAME's natural-keyboard/clipboard-paste
+	// engine, so live keyboard play is completely unaffected. Its
+	// PORT_CHANGED_MEMBER callback (pc1360_state::shift_chord_changed(),
+	// pc1360_m.cpp) fires the instant natural_keyboard presses this field
+	// to begin a SHIFT+key chord for a shifted character, and reproduces
+	// the real hardware's tap-then-release SHIFT behavior (see the comment
+	// on KEY0 0x40 above) by pulsing the REAL SHIFT bit on and back off
+	// again, via a short one-shot timer, well before natural_keyboard's own
+	// per-field delay (see choose_delay() in natkeyboard.cpp) presses the
+	// base character key. This keeps the fix entirely local to this driver
+	// -- natkeyboard.cpp's generic chording engine itself is untouched.
+	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("SHIFT (paste)") PORT_CHAR(UCHAR_SHIFT_1) PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(pc1360_state::shift_chord_changed), 0)
 
 	PORT_START("DSW0")
 	PORT_DIPNAME( 0x07, 0x01, "Contrast")
@@ -1143,6 +1209,16 @@ void pc1350_state::pc1350(machine_config &config)
 
 	/* internal ram */
 	RAM(config, m_ram).set_default_size("4K").set_extra_options("12K,20K");
+
+	// Direct-memory BASIC-program injection: select a plain-text .BAS file
+	// via the quickload/file-manager UI and it's natively tokenized
+	// (pocketc_bas.cpp, a from-scratch port of POCKTOOL's bas2img format)
+	// and written straight into the program area -- see
+	// claude/pc1360-basic-tokenizer-format.md and pc1350_m.cpp's
+	// quickload_cb() for the full background. A practical substitute for
+	// real 11-pin serial emulation (see pc1350-pc1360-serial-feasibility.md
+	// for why that path is high-risk/high-effort on this CPU family).
+	QUICKLOAD(config, "quikload", "bas,txt", attotime::zero).set_load_callback(FUNC(pc1350_state::quickload_cb));
 }
 
 void pc1360_state::pc1360(machine_config &config)
@@ -1183,6 +1259,12 @@ void pc1360_state::pc1360(machine_config &config)
 	   window is populated at all. Fixed at a flat 32K -- see
 	   pc1360_state::machine_start() in pc1360_m.cpp. */
 	RAM(config, m_ram).set_default_size("32K");
+
+	// Direct-memory BASIC-program injection -- see the identical comment
+	// in pc1350() above; pc1360_m.cpp's quickload_cb() has the PC-1360-
+	// specific pointer addresses and the hardware-confirmed 0xFF sentinel
+	// handling.
+	QUICKLOAD(config, "quikload", "bas,txt", attotime::zero).set_load_callback(FUNC(pc1360_state::quickload_cb));
 }
 
 void pc1403_state::pc1403(machine_config &config)

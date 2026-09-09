@@ -101,6 +101,11 @@
 #include "pocketc.h"
 #include "machine/ram.h"
 
+#include <system_error>
+#include <utility>
+
+class snapshot_image_device;
+
 class pc1360_state : public pocketc_state
 {
 public:
@@ -114,8 +119,34 @@ public:
 
 	void pc1360(machine_config &config);
 
+	// Shift-chord fix for clipboard paste (see the "SHIFT (paste)" phantom
+	// field on the EXTRA port and the KEY0 0x40 SHIFT field's comment, both
+	// in pocketc.cpp): the phantom field's PORT_CHANGED_MEMBER callback
+	// pulses the real SHIFT bit via a one-shot timer instead of holding it
+	// down for the whole chord, reproducing the real hardware's
+	// tap-then-release SHIFT behavior for pasted shifted characters. Public
+	// (like other PORT_CHANGED_MEMBER handlers in MAME) because the ioport
+	// configuration code that wires it up via FUNC(...) in pocketc.cpp is
+	// not a member of this class. Implemented in pc1360_m.cpp.
+	DECLARE_INPUT_CHANGED_MEMBER(shift_chord_changed);
+
+	// QUICKLOAD callback for the "quikload" file-manager slot added in
+	// pocketc.cpp's pc1360() -- tokenizes a plain-text .BAS file (native
+	// C++ port of POCKTOOL's bas2img, see pocketc_bas.h/.cpp) and injects
+	// it directly into the program area, bypassing serial-protocol
+	// emulation entirely. See claude/pc1360-basic-tokenizer-format.md in
+	// the project for the format/pointer background (including the
+	// leading/trailing 0xFF sentinel bytes) this is built on. Public for
+	// the same reason shift_chord_changed() is: the device config code
+	// that binds it via FUNC(...) in pocketc.cpp isn't a member of this
+	// class.
+	std::pair<std::error_condition, std::string> quickload_cb(snapshot_image_device &image);
+
 protected:
 	virtual void machine_start() override ATTR_COLD;
+
+	// One-shot completion callback for shift_chord_changed() above.
+	TIMER_CALLBACK_MEMBER(release_shift_pulse);
 
 	// REMOVED (per user request): this used to auto-press the Y key (KEY6,
 	// row 6) a short while after boot to accept the "confirm RAM clear"
@@ -182,6 +213,10 @@ private:
 	uint8_t m_strobe = 0;
 	uint8_t m_serial = 0;
 	uint8_t m_kb_strobe = 0;
+
+	// One-shot timer backing shift_chord_changed()/release_shift_pulse()
+	// above -- allocated in machine_start() (pc1360_m.cpp).
+	emu_timer *m_shift_pulse_timer = nullptr;
 
 	static const char* const s_def[5];
 	static const char* const s_shift[5];

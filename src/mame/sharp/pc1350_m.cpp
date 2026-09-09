@@ -5,7 +5,9 @@
 
 #include "pocketc.h"
 #include "pc1350.h"
+#include "pocketc_bas.h"
 #include "machine/ram.h"
+#include "imagedev/snapquik.h"
 
 void pc1350_state::out_b_w(uint8_t data)
 {
@@ -55,9 +57,52 @@ uint8_t pc1350_state::in_b_r()
 	return m_outb;
 }
 
+/*
+ * Shift-chord fix for clipboard paste -- same mechanism as
+ * pc1360_state::shift_chord_changed()/release_shift_pulse() (pc1360_m.cpp),
+ * applied here because the user confirmed PC-1350's real SHIFT keys behave
+ * the same way: a simultaneous-hold left SHIFT and a separate tap-to-latch
+ * right SHIFT (this driver's real, host-key-bound SHIFT field, KEY0 0x40,
+ * is the latter). MAME's natural-keyboard engine only ever implements the
+ * simultaneous-hold style, so pasted SHIFT-chorded characters (the
+ * "!"/'"'/'#'/etc. row) need this same interception: the phantom
+ * "SHIFT (paste)" field on the EXTRA port (see pocketc.cpp) carries
+ * PORT_CHAR(UCHAR_SHIFT_1) so natural_keyboard presses IT (never the real
+ * SHIFT key directly) to begin a chord, and this callback converts that
+ * hold into a real tap-then-release of the real SHIFT field before
+ * natural_keyboard presses the base character field.
+ */
+INPUT_CHANGED_MEMBER(pc1350_state::shift_chord_changed)
+{
+	// Only the phantom field's rising edge matters -- that's
+	// natural_keyboard beginning a chord. Its later release of this same
+	// phantom field (the falling edge) has no real hardware bit behind it
+	// and needs no action.
+	if (!newval)
+		return;
+
+	// Tap the REAL SHIFT key (KEY0 0x40) on now...
+	m_keys[0]->field(0x40)->set_value(1);
+
+	// ...and release it again shortly afterwards, well before
+	// natural_keyboard presses the base character key (see choose_delay()
+	// in natkeyboard.cpp for PC-1350's per-field delay), so the real
+	// hardware never sees the two keys held down together.
+	m_shift_pulse_timer->adjust(attotime::from_msec(150));
+}
+
+TIMER_CALLBACK_MEMBER(pc1350_state::release_shift_pulse)
+{
+	m_keys[0]->field(0x40)->clear_value();
+}
+
 void pc1350_state::machine_start()
 {
 	pocketc_state::machine_start();
+
+	// Backs shift_chord_changed()/release_shift_pulse() above -- the
+	// clipboard-paste shift-chord fix.
+	m_shift_pulse_timer = timer_alloc(FUNC(pc1350_state::release_shift_pulse), this);
 
 	address_space &space = m_maincpu->space(AS_PROGRAM);
 
@@ -134,4 +179,75 @@ void pc1350_state::machine_reset()
 		ram[0xf03] = 0x30; // end of program area, low byte -- == start
 		ram[0xf04] = 0x60; // ...high byte -> 0x6030 (empty program)
 	}
+}
+
+/*
+ * QUICKLOAD_LOAD_MEMBER(pc1350_state, quickload_cb)
+ * ---------------------------------------------------------------------
+ * Loads a plain-text .BAS file selected via MAME's quickload file
+ * manager, tokenizes it natively (pocketc_bas::tokenize_program(),
+ * PC1350 model -- single-byte tokens), and writes the result directly
+ * into the program area -- the direct-memory-injection alternative to
+ * real 11-pin serial emulation explored in
+ * claude/pc1350-pc1360-serial-feasibility.md.
+ *
+ * PC-1350's program area is always at a fixed 0x6030 regardless of the
+ * optional 12K/20K RAM-card size (that RAM only extends the workspace at
+ * 0x2000-0x5fff; the program-pointer bytes at 0x6f01-0x6f04 always live
+ * in the fixed 0x6000-0x6fff window, see machine_start() above), and
+ * machine_reset() above already forces this pointer pair to 0x6030 on a
+ * genuine cold boot. This callback still defensively re-derives the base
+ * address if the current pointer looks outside that window, rather than
+ * assuming machine_reset() always ran first.
+ *
+ * NOTE: the leading/trailing 0xFF bracketing bytes around the tokenized
+ * content are confirmed against real MAME memory for PC-1360 specifically
+ * (see the project's tokenizer-format doc) but NOT yet independently
+ * verified against real PC-1350 hardware/MAME memory -- applied here on
+ * the working assumption that this BASIC-ROM-family convention (and the
+ * "end pointer addresses the trailing FF itself" rule) is shared, since
+ * both models already share the exact same start/end-pointer-pair layout
+ * convention. Please double-check against a real PC-1350 memory dump
+ * before relying on this beyond testing.
+ */
+std::pair<std::error_condition, std::string> pc1350_state::quickload_cb(snapshot_image_device &image)
+{
+	uint64_t size = image.length();
+	std::vector<char> text(size);
+	if (size > 0 && image.fread(text.data(), size) != size)
+		return std::make_pair(std::errc::io_error, std::string("Error reading file"));
+
+	std::vector<uint8_t> tokenized;
+	std::string error;
+	if (!pocketc_bas::tokenize_program(pocketc_bas::model::PC1350, std::string(text.data(), size), tokenized, error))
+		return std::make_pair(std::errc::invalid_argument, error);
+
+	address_space &space = m_maincpu->space(AS_PROGRAM);
+
+	constexpr uint32_t ram_window_lo = 0x6000, ram_window_hi = 0x6fff;
+	constexpr uint32_t expected_start = 0x6030;
+
+	uint32_t start = space.read_byte(0x6f01) | (space.read_byte(0x6f02) << 8);
+	if (start < ram_window_lo || start > ram_window_hi)
+		start = expected_start; // cold-boot pointer wasn't sane -- fall back
+
+	if (tokenized.size() > (ram_window_hi - start))
+	{
+		return std::make_pair(std::errc::file_too_large,
+			util::string_format("Tokenized program (%u bytes) does not fit in the %u bytes free from %04X",
+				(unsigned)tokenized.size(), (unsigned)(ram_window_hi - start), start));
+	}
+
+	space.write_byte(start, 0xff); // leading sentinel (see doc)
+	for (size_t i = 0; i < tokenized.size(); i++)
+		space.write_byte(start + 1 + i, tokenized[i]);
+
+	const uint32_t end = start + uint32_t(tokenized.size());
+
+	space.write_byte(0x6f01, start & 0xff);
+	space.write_byte(0x6f02, (start >> 8) & 0xff);
+	space.write_byte(0x6f03, end & 0xff);
+	space.write_byte(0x6f04, (end >> 8) & 0xff);
+
+	return std::make_pair(std::error_condition(), std::string());
 }
