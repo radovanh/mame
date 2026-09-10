@@ -84,10 +84,13 @@ uint8_t pc1360_state::in_a_r()
 	// row-decode fix in this function addressed. A speculative attempt at
 	// wiring these up (KEY11-13, one test bit each) found no effect on any
 	// of them, so it was reverted rather than shipped half-confirmed -- see
-	// chat history. MODE and the cursor keys (UP/DOWN/LEFT/RIGHT, currently
-	// in KEY5 where they're confirmed NOT to work -- LEFT/RIGHT print a
-	// garbage "0." and DOWN toggles the unrelated JAPAN display flag) remain
-	// unexplained; bits 4-6 here are still a real, uninvestigated gap.
+	// chat history. MODE and LEFT/RIGHT have since been confirmed at KEY6
+	// (0x02/0x04/0x08), and UP/DOWN have since been confirmed at KEY5
+	// 0x04/0x08 (see INPUT_PORTS_START(pc1360) in pocketc.cpp) -- KEY5
+	// 0x01/0x02 (the driver's original UP/DOWN guess) are not cursor keys
+	// at all; 0x02 is the JAPAN-flag toggle and 0x01's real function is
+	// still unidentified. Bits 4-6 here are still a real, uninvestigated
+	// gap.
 	for (int bit = 0, key = 7; bit < 4; bit++, key++)
 		if (BIT(m_outa, bit))
 			data |= m_keys[key]->read();

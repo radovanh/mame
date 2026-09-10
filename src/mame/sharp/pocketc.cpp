@@ -788,17 +788,36 @@ INPUT_PORTS_END
  * deletes anything. KEYCODE_PAUSE (MODE's original physical-key binding)
  * now lives on KEY6 0x02 instead of KEY7 0x08.
  *
- * KEY5 bits 0x04/0x08 (this driver's ORIGINAL LEFT/RIGHT positions,
- * carried over from pc1350.cpp) are confirmed to NOT be LEFT/RIGHT --
- * pressing them prints a garbage "0." to the display -- so they're left
- * as IPT_UNUSED rather than mislabelled; their real function (if any) is
- * still unknown, and the same bit-sweep that found MODE found no other
- * effect from them. INS's real electrical position is likewise still
- * unknown -- KEYCODE_INSERT isn't attached to anything below. UP/DOWN
- * (KEY5 bits 0x01/0x02) remain unconfirmed/not working -- DOWN toggles
- * the unrelated JAPAN display flag instead of moving the cursor, and
- * there is likely no dedicated physical key for that at all; left
- * unchanged pending further investigation.
+ * KEY5 bits 0x04/0x08 are the REAL UP/DOWN cursor keys (user-confirmed
+ * via the artwork's clickable bezels, which set these ioport bits
+ * directly and move the cursor correctly) -- NOT LEFT/RIGHT as this
+ * driver originally assumed when it carried them over from pc1350.cpp
+ * (an earlier round of bit-sweep testing concluded they printed garbage
+ * "0." and left them IPT_UNUSED; that conclusion was about LEFT/RIGHT
+ * function specifically and didn't rule out UP/DOWN, which is what they
+ * actually are). Bit 0x04 is DOWN, bit 0x08 is UP -- opposite of the
+ * bezel order in the artwork layout (KEY5 0x04 sits at the visual UP
+ * position, KEY5 0x08 at the visual DOWN position; the artwork's own
+ * click-to-bit wiring is what's authoritative and already correct, this
+ * is just a note that bit number and on-screen position don't match up
+ * here). User-confirmed via testing the rebound keyboard codes: binding
+ * KEYCODE_UP to 0x04/KEYCODE_DOWN to 0x08 (matching bezel screen
+ * position) moved the cursor backwards, so it's bound the other way
+ * round below -- KEYCODE_DOWN to 0x04, KEYCODE_UP to 0x08 -- to match
+ * the real function of each bit rather than its on-screen position.
+ * INS's real electrical position is still unknown -- KEYCODE_INSERT
+ * isn't attached to anything below.
+ *
+ * KEY5 bits 0x01/0x02 (user-confirmed, see chat history): these were the
+ * driver's ORIGINAL UP/DOWN positions (bit 0x01 = UP, bit 0x02 = DOWN,
+ * carried over from pc1350.cpp) and were bound to KEYCODE_UP/KEYCODE_DOWN
+ * before this fix -- but neither is a real cursor key. Bit 0x02 toggles
+ * the unrelated JAPAN display flag; bit 0x01 has some other, still
+ * unidentified effect (user testing described it as producing a
+ * DOWN-cursor-like effect, but the real, confirmed DOWN cursor key is
+ * bit 0x08 above, not this bit). Both bits are now unbound and left
+ * IPT_UNUSED -- there is likely no dedicated physical key for either of
+ * them.
  *
  * CLS's PORT_CODE default below is deliberately NOT KEYCODE_ESC (the
  * "natural" choice, and pc1350.cpp's own pick for the equivalent key) --
@@ -877,23 +896,33 @@ static INPUT_PORTS_START( pc1360 )
 	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("R     $") PORT_CODE(KEYCODE_R)  PORT_CHAR('R')  PORT_CHAR('$')
 
 	PORT_START("KEY5")
-	// UP/DOWN confirmed NOT to move the cursor (DOWN instead toggles the
-	// unrelated JAPAN display flag) -- left wired to their original codes
-	// pending further investigation, and deliberately given no PORT_CHAR
-	// (see the block comment above INPUT_PORTS_START(pc1360)): pasted text
-	// essentially never contains raw cursor-key codes, so this costs
-	// nothing, and it avoids attaching paste behavior to a key that
-	// doesn't actually do what its label says.
-	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("UP") PORT_CODE(KEYCODE_UP)
-	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("DOWN") PORT_CODE(KEYCODE_DOWN)
-	// CONFIRMED (headless bit-sweep/screenshot testing, independently
-	// reconfirmed by the user's own artwork remap -- see the block comment
-	// above INPUT_PORTS_START(pc1360)): these two bits are NOT LEFT/RIGHT --
-	// pressing them prints a garbage "0." to the display instead of moving
-	// the cursor. The real LEFT/RIGHT live at KEY6 0x08/0x04 (see below).
-	// Left as IPT_UNUSED since their real function is still unknown.
-	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_UNUSED)
-	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_UNUSED)
+	// CONFIRMED (user testing, see the block comment above
+	// INPUT_PORTS_START(pc1360)): these were the driver's original
+	// UP/DOWN positions and were bound to KEYCODE_UP/KEYCODE_DOWN before
+	// this fix, but neither is a real cursor key -- bit 0x02 toggles the
+	// unrelated JAPAN display flag (see pc1360.cpp's screen_update(),
+	// m_reg[0x83c] bit 6), and bit 0x01's real function is still
+	// unidentified. The real UP/DOWN cursor keys are bits 0x04/0x08 below
+	// -- unbound here and left IPT_UNUSED so the keyboard's Up/Down arrows
+	// only trigger the real cursor keys, not these.
+	PORT_BIT(0x01, IP_ACTIVE_HIGH, IPT_UNUSED)
+	PORT_BIT(0x02, IP_ACTIVE_HIGH, IPT_UNUSED)
+	// CONFIRMED (user testing via the artwork's clickable bezels, which
+	// set these ioport bits directly and correctly move the cursor -- see
+	// the block comment above INPUT_PORTS_START(pc1360)): these are the
+	// REAL UP/DOWN cursor keys, not LEFT/RIGHT as this driver originally
+	// assumed (carried over from pc1350.cpp) nor IPT_UNUSED as a later,
+	// incomplete bit-sweep concluded. Bit 0x04 is DOWN and bit 0x08 is UP
+	// -- the OPPOSITE of their on-screen bezel position in the artwork
+	// (0x04's bezel sits at the visual UP spot, 0x08's at the visual DOWN
+	// spot) -- confirmed by the user after binding KEYCODE_UP/DOWN to
+	// match bezel position moved the cursor backwards. Bound to
+	// KEYCODE_DOWN/KEYCODE_UP accordingly (by real function, not screen
+	// position) so the physical keyboard's arrow keys move the cursor the
+	// right way, and given PORT_CHAR now that they're confirmed working
+	// cursor keys (matching RIGHT/LEFT at KEY6 below).
+	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("DOWN") PORT_CODE(KEYCODE_DOWN)  PORT_CHAR(UCHAR_MAMEKEY(DOWN))
+	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("UP") PORT_CODE(KEYCODE_UP)  PORT_CHAR(UCHAR_MAMEKEY(UP))
 	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("B") PORT_CODE(KEYCODE_B)  PORT_CHAR('B')
 	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("G") PORT_CODE(KEYCODE_G)  PORT_CHAR('G')
 	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("T     %") PORT_CODE(KEYCODE_T)  PORT_CHAR('T')  PORT_CHAR('%')
