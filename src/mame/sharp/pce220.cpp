@@ -24,6 +24,7 @@
 
 #include "emu.h"
 
+#include "pce220_prn.h"
 #include "pce220_ser.h"
 #include "pocketc_bas.h"
 
@@ -169,6 +170,7 @@ class pcg850v_state : public pce220_state
 public:
 	pcg850v_state(const machine_config &mconfig, device_type type, const char *tag)
 		: pce220_state(mconfig, type, tag)
+		, m_ce126p(*this, "ce126p")
 		{ }
 
 	void pcg850v(machine_config &config);
@@ -195,12 +197,36 @@ protected:
 	virtual void machine_reset() override ATTR_COLD;
 
 private:
+	// CE-126P printer (pce220_prn.h/.cpp), sharing the same busy/dout/xout/
+	// din/ack/xin wires on this connector as m_serial (see port18_w/
+	// port1f_r below). Only wired up for pcg850v() -- see the comment above
+	// pcg850v_state::pcg850v() in the machine_config.
+	required_device<ce126p_printer_device> m_ce126p;
+
 	uint8_t m_g850v_bank_num = 0;
+
+	// Port 0x60's stored value -- see port60_r()/port60_w()'s comment for
+	// what this actually is (an 11-pin-interface mode selector, confirmed
+	// from PockEmul's Cg850v::in()/out(), not the presence-sense guess this
+	// started as).
+	uint8_t m_pin11if = 0;
 
 	SED1560_UPDATE_CB(sed1560_update);
 	uint8_t g850v_bank_r();
 	void g850v_rom_bank_w(uint8_t data);
 	void g850v_bank_w(uint8_t data);
+	// Shadow (not virtually override -- pce220_state::port18_w/port1f_r
+	// aren't virtual, and pcg850v_io()'s address_map binds these explicitly
+	// via FUNC(pcg850v_state::...)) the base handlers so the CE-126P device
+	// also sees the host's BUSY/D_OUT/MT_OUT1 output and contributes its
+	// own ACK back, alongside the existing serial device on the same pins.
+	void port18_w(uint8_t data);
+	uint8_t port1f_r();
+	// New port, not shadowing anything in pce220_state -- see the comment on
+	// the implementation for what this is and the disassembly/PockEmul
+	// evidence behind it.
+	uint8_t port60_r();
+	void port60_w(uint8_t data);
 	void pcg850v_io(address_map &map) ATTR_COLD;
 };
 
@@ -603,10 +629,85 @@ void pcg815_state::pcg815_io(address_map &map)
 void pcg850v_state::pcg850v_io(address_map &map)
 {
 	pce220_io_common(map);
+	map(0x18, 0x18).rw(FUNC(pcg850v_state::port18_r), FUNC(pcg850v_state::port18_w));
 	map(0x19, 0x19).rw(FUNC(pcg850v_state::rom_bank_r), FUNC(pcg850v_state::g850v_rom_bank_w));
+	map(0x1f, 0x1f).r(FUNC(pcg850v_state::port1f_r));
 	map(0x40, 0x41).mirror(0x1e).rw("sed1560", FUNC(sed1560_device::read), FUNC(sed1560_device::write));
+	map(0x60, 0x60).rw(FUNC(pcg850v_state::port60_r), FUNC(pcg850v_state::port60_w));
 	map(0x69, 0x69).rw(FUNC(pcg850v_state::g850v_bank_r), FUNC(pcg850v_state::g850v_bank_w));
 	map(0x74, 0x74).nopr();
+}
+
+// Extends pce220_state::port18_w with the CE-126P printer -- see the field
+// comment on m_ce126p. Both m_serial and m_ce126p see every write; in
+// practice only one physical peripheral is ever plugged into this
+// connector, and only the one with media actually attached in MAME's Media
+// Control (image loaded/serial file attached) drives anything back.
+void pcg850v_state::port18_w(uint8_t data)
+{
+	pce220_state::port18_w(data);
+
+	m_ce126p->out_busy(BIT(data, 0));
+	m_ce126p->out_dout(BIT(data, 1));
+	m_ce126p->out_xout(BIT(data, 7));
+}
+
+// Extends pce220_state::port1f_r with the CE-126P's own ACK contribution on
+// the shared ACK bit. CE-126P never drives D_IN/MT_IN (see pce220_prn.h),
+// so those two bits are left to m_serial alone.
+uint8_t pcg850v_state::port1f_r()
+{
+	uint8_t data = pce220_state::port1f_r();
+
+	data |= m_ce126p->in_ack() << 1;
+
+	return data;
+}
+
+// Port 0x60 is not part of pce220_state at all -- unmapped there and in
+// pcg815_state, and never referenced anywhere in this file before the
+// 2026-09-11 change that first added it (see git history / the dated
+// updates in claude/printer-emulation-feasibility.md for that earlier,
+// now-superseded "presence sense" hypothesis and the disassembly finding
+// that motivated it).
+//
+// It's a plain read/write latch selecting which protocol the 11-pin
+// connector speaks, confirmed directly from PockEmul's own PC-G850V
+// machine emulation (Cg850v::in()/out() in g850v.cpp, not Cce126 -- Cce126
+// models only the printer side of the bus and never touches this port at
+// all):
+//
+//   case 0x60: pin11If = value & 0x03; return 0;      // out()
+//   case 0x60: pCPU->imem[address] = pin11If; return 0; // in()
+//
+// with pin11If meaning 0 = 3-wire bit-bang (BUSY/DOUT/XOUT, i.e. the
+// CE-126P protocol this file implements), 1 = 8-bit parallel PIO, 2 =
+// UART/serial. It's just an echo of the last value written -- no
+// dependency on what's actually plugged into the connector -- and
+// PockEmul's own Cg850v::Reset() writes 0 here unconditionally at reset,
+// matching the boot-time `unmapped io memory write to 0060 = 00` seen in
+// an early real-ROM capture before this port was mapped at all.
+//
+// The original disassembly finding (LPRINT immediately does
+// `in a,($60); and $03; cp $00; jp nz,<ERROR 72>`) still explains why
+// leaving this port unmapped broke LPRINT: pce220_io_common() calls
+// map.unmap_value_high(), so an unmapped read here came back $FF, and
+// `$FF & $03 == $00` is false -- the ROM is checking that the 11-pin
+// interface is currently in 3-wire mode (pin11If == 0) before trying to
+// use it as a printer, not checking device presence. Reset already
+// defaults m_pin11if to 0 (3-wire), and the real ROM apparently also
+// explicitly selects mode 0 itself before this check on real hardware
+// (matching PockEmul's Cg850v::Reset()), so this latch being correctly
+// read/write, rather than tied to printer/serial attachment, is what
+// actually matters here -- not any particular default.
+uint8_t pcg850v_state::port60_r()
+{
+	return m_pin11if;
+}
+
+void pcg850v_state::port60_w(uint8_t data)
+{
+	m_pin11if = data & 0x03;
 }
 
 INPUT_CHANGED_MEMBER(pce220_state::kb_irq)
@@ -873,6 +974,7 @@ void pcg850v_state::machine_start()
 	m_banks[3]->configure_entries(0, 22, rom, 0x4000);
 
 	save_item(NAME(m_g850v_bank_num));
+	save_item(NAME(m_pin11if));
 }
 
 void pce220_state::install_bootrom()
@@ -903,6 +1005,7 @@ void pcg850v_state::machine_reset()
 	pce220_state::machine_reset();
 
 	m_g850v_bank_num = 0;
+	m_pin11if = 0; // 3-wire bit-bang mode -- see port60_r()/port60_w()
 }
 
 /*
@@ -1150,6 +1253,15 @@ void pcg850v_state::pcg850v(machine_config &config)
 	// run different ROM/OS versions whose RAM-disk catalog format hasn't
 	// been independently verified to match.
 	QUICKLOAD(config, "quikload", "bas", attotime::zero).set_load_callback(FUNC(pcg850v_state::quickload_cb));
+
+	// CE-126P thermal printer (pce220_prn.h/.cpp): shares the 11-pin
+	// connector's busy/dout/xout/din/ack/xin wires with m_serial above (see
+	// port18_w/port1f_r) but speaks CE-126P's own device-select/print-data
+	// protocol rather than an async UART frame -- see
+	// claude/printer-emulation-feasibility.md for the PockEmul source
+	// analysis this is built from. Only wired up for pcg850v() specifically
+	// -- PC-E220/PC-G815 aren't covered by this feasibility pass.
+	CE126P_PRINTER(config, m_ce126p);
 }
 
 /* ROM definition */
