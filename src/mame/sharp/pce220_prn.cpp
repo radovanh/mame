@@ -173,35 +173,49 @@ void ce126p_printer_device::shift_in_bit(uint8_t bit)
 
 void ce126p_printer_device::receive_byte(uint8_t data)
 {
-	if (m_ctrl_pending)
+	logerror("CE126P: receive_byte raw=%02X ctrl_pending=%d\n", data, m_ctrl_pending ? 1 : 0);
+
+	// Reproduces Cce126::Printer() exactly -- see the header comment's
+	// 2026-09-11 note for why this isn't translated into anything more
+	// ASCII-like any more (the earlier "0x20 after a prefix means paper
+	// feed, remap to 0x0a" mapping was simply wrong).
+	if (m_ctrl_pending && data == 0x20)
 	{
+		// Only this exact combination clears the pending prefix.
 		m_ctrl_pending = false;
-
-		if (data == 0x20)
-		{
-			// paper feed -- no ASCII equivalent for a plain byte-sink
-			// capture, remapped to a line advance (see header comment)
-			m_printer->output(0x0a);
-			return;
-		}
-
-		// Cce126::Printer() leaves ctrl_char set (a no-op reassignment, or
-		// simply never cleared) when the byte after a prefix isn't 0x20,
-		// so a genuinely ordinary byte immediately following a prefix gets
-		// printed there too. Reproduced here by simply falling through and
-		// clearing the pending flag; a following prefix byte re-arms it
-		// via the check below either way.
+		logerror("CE126P: -> literal space (prefix consumed)\n");
+		m_printer->output(0x20);
+		return;
 	}
 
 	if (data == 0x0f || data == 0x0e || data == 0x03)
 	{
-		m_ctrl_pending = true;
+		m_ctrl_pending = true; // stays set if it already was
+		logerror("CE126P: -> control prefix, pending\n");
 		return;
 	}
 
-	// a literal 0x0d (not behind a control-code prefix) is CE-126P's own
+	if (data == 0xf0)
+	{
+		// CE-126P's own reserved glyph code for a distinctively-drawn "0"
+		// (confirmed via real-ROM LLIST captures -- see the header
+		// comment's 2026-09-11 note) rather than plain ASCII 0x30. This
+		// first cut targets a plain-text byte-sink capture file, not a
+		// real glyph-table renderer, so there's no reason to carry the
+		// hardware's own font code through to the file -- translate it to
+		// the ordinary digit it represents instead.
+		logerror("CE126P: -> output 30 (0xF0 zero-glyph translated)%s\n", m_ctrl_pending ? " (ctrl_pending still set)" : "");
+		m_printer->output('0');
+		return;
+	}
+
+	// A literal 0x0d (not behind a control-code prefix) is CE-126P's own
 	// carriage-return/line-advance byte in Cce126::RefreshCe126() -- already
-	// exactly what a plain-text capture wants, so no translation needed
+	// exactly what a plain-text capture wants, so no translation needed.
+	// Note m_ctrl_pending is deliberately NOT cleared here if it was set --
+	// matches Cce126::Printer()'s own behavior of leaving ctrl_char set
+	// until a prefix is specifically followed by 0x20.
+	logerror("CE126P: -> output %02X%s\n", data, m_ctrl_pending ? " (ctrl_pending still set)" : "");
 	m_printer->output(data);
 }
 
@@ -233,6 +247,7 @@ void ce126p_printer_device::out_busy(uint8_t state)
 			{
 				m_device_code = m_shift;
 				m_selected = is_recognized_device_code(m_device_code);
+				logerror("CE126P: select byte = %02X (%s)\n", m_device_code, m_selected ? "selected" : "not selected");
 
 				if (m_selected)
 				{
@@ -284,7 +299,10 @@ void ce126p_printer_device::out_busy(uint8_t state)
 		// ST_MISMATCH_HOLD / ST_SELECTED_ACK_HOLD) don't react to BUSY
 		// here; they're only waiting on their own delay timer. (A BUSY
 		// edge arriving during ST_SELECTED_ACK_HOLD isn't lost -- see the
-		// catch-up check in delay_tick()'s ST_SELECTED_ACK_HOLD case.)
+		// catch-up check in delay_tick()'s ST_SELECTED_ACK_HOLD case. A
+		// 2026-09-11 real-ROM capture with per-bit logging confirmed this
+		// hold never actually receives more than the one edge the catch-up
+		// check accounts for, so the design is fine as-is.)
 		break;
 	}
 }
@@ -319,7 +337,11 @@ void ce126p_printer_device::out_xout(uint8_t state)
 	if (rising)
 	{
 		if (m_state == ST_IDLE)
+		{
+			logerror("CE126P: XOUT rising -- new select attempt starting (was %s)\n",
+					m_selected ? "selected" : "not selected");
 			enter_state(ST_SETTLE);
+		}
 		// a rising edge seen mid-handshake is not expected on real
 		// hardware; ignored rather than restarting the sequence
 	}

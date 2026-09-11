@@ -107,18 +107,64 @@
       Cce126 unconditionally does in PockEmul (which has no such concept).
 
     Glyph rendering: this first cut targets imagedev/printer.h, a plain
-    byte-to-file sink with no bitmap/paper rendering of its own. Two of
-    Cce126::Printer()'s three cases translate directly: an ordinary data
-    byte is forwarded as-is, and a literal 0x0d byte (not preceded by a
-    control-code prefix) is forwarded as-is too, matching real thermal
-    printer / plain-text-capture conventions where 0x0d already reads as a
-    line break. The remaining case -- 0x0f/0x0e/0x03 as a "next byte is a
-    control code" prefix, with 0x20 after one of those meaning paper feed
-    -- has no ASCII equivalent to fall back on, so it is remapped to 0x0a
-    for the plain byte-sink capture (a paper feed is, in every practical
-    sense, a blank line advance). A future bespoke bitmap/glyph-table
-    renderer (built on ce126ptable.bmp's layout, per the feasibility doc)
-    would reproduce Cce126::RefreshCe126()'s actual pixel behavior instead.
+    byte-to-file sink with no bitmap/paper rendering of its own, so
+    receive_byte() reproduces Cce126::Printer() byte-for-byte rather than
+    trying to translate its cases into something more ASCII-like:
+
+      if(ctrl_char && d==0x20) { ctrl_char=false; RefreshCe126(d); }
+      else {
+          if(d==0xf || d==0xe || d==0x03) ctrl_char=true;
+          else RefreshCe126(d);
+      }
+
+    2026-09-11: an earlier version of this misread the first branch as "a
+    paper-feed function with no ASCII equivalent", and remapped it to 0x0a
+    for the plain byte-sink capture. Re-reading RefreshCe126() shows that's
+    wrong -- RefreshCe126(0x20) is not a special case there at all (only
+    RefreshCe126(0x0d) is); it just draws the ordinary glyph for character
+    0x20 (a space). So a 0x0f/0x0e/0x03 prefix followed specifically by
+    0x20 means "print a literal space", not "advance the paper" -- there is
+    no paper-feed byte anywhere in this function. Also worth noting: only
+    that exact prefix-then-0x20 sequence clears ctrl_char. A prefix
+    followed by anything else (not 0x20, not another prefix byte) takes the
+    plain `else RefreshCe126(d)` path -- the byte still prints normally,
+    but ctrl_char is left set, so it keeps swallowing the *next* attempted
+    prefix byte too. An earlier version of receive_byte() also
+    deliberately diverged here (clearing the pending flag unconditionally
+    once a non-prefix byte arrived) as a documented simplification; it's
+    now reproduced exactly instead, since there's no real-hardware evidence
+    yet either way and matching the reference exactly is the safer default
+    until there is. A literal 0x0d (not preceded by a prefix) still
+    forwards as-is -- that part was already correct and needed no change.
+
+    A future bespoke bitmap/glyph-table renderer (built on ce126ptable.bmp's
+    layout, per the feasibility doc) would reproduce RefreshCe126()'s
+    actual pixel behavior (including its own real paper-feed effect on
+    0x0d: advancing the vertical print position) instead of just archiving
+    raw bytes the way this first cut does.
+
+    2026-09-11: a real-ROM LLIST capture turned up one more case worth
+    flagging for that future renderer. Every literal digit "0" inside a
+    *number* (specifically, a program line number during LLIST -- e.g. the
+    "0" in line 10 or line 20) arrives over the wire as raw byte 0xF0, not
+    ASCII 0x30. Bit-level captures confirm this is a genuine byte the ROM
+    sends (clean 8-bit framing both times), and a follow-up test with line
+    numbers containing no "0" digit (15, 23) came back with completely
+    plain ASCII throughout -- ruling out any generic "last digit of a
+    number gets flagged" theory. It's specifically the digit value zero.
+    Likely explanation: CE-126P (calculator heritage) reserves its own
+    glyph code for a distinctively-drawn "0" (e.g. slashed, to disambiguate
+    from the letter O) separate from plain ASCII '0', and the ROM's
+    number-to-text conversion routine emits that code for a formatted
+    *number*'s zero digits while ordinary string/keyword text stays plain
+    ASCII. Since this first cut targets a plain-text byte-sink capture file
+    (imagedev/printer.h) rather than a real glyph-table renderer, there's
+    no value in preserving CE-126P's own font-table code once its meaning
+    is known -- receive_byte() now translates 0xF0 to ordinary ASCII '0'
+    (0x30) directly, rather than archiving the raw hardware byte the way
+    everything else in this function does. A future bespoke glyph-table
+    renderer (see above) would instead want to look 0xF0 up in the real
+    font table like any other byte, rather than special-casing it.
 
 ****************************************************************************/
 
