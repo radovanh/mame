@@ -320,6 +320,28 @@ void pc1360_state::machine_start()
 
 	space.install_ram(ram_base, 0xffff, m_ram->pointer());
 
+	// FIX (2026-09-12): pc1360_mem()'s static address map declares the
+	// WHOLE 0x8000-0xffff range as .ram() (a separate, always-present
+	// auto-allocated buffer, unrelated to m_ram) -- that comment block
+	// explains this was intentional for the single-size-only case this
+	// driver had at the time. install_ram() above only overrides the
+	// actual card window [ram_base, 0xffff] with m_ram's buffer; it does
+	// NOT remove the static map's own RAM underneath the rest of the
+	// range. So for any card smaller than 32K, addresses below ram_base
+	// were still fully live, persistent RAM (confirmed empirically: a
+	// byte written at 0x9000 with an 8K card read back correctly instead
+	// of reading as absent) -- meaning the BASIC ROM's own memory-size
+	// probe at boot always found a full 32K physically present no matter
+	// what RAM() size was selected, so the MEM command never reflected
+	// the selected card size. Unmapping the region below the real card's
+	// window makes the address space match the per-size window table in
+	// pc1360.h (4K/8K/16K/32K) exactly, so the ROM's own detection now
+	// sees only the actually-installed window. No-op for the 32K default
+	// (ram_base == 0x8000), preserving the already-hardware-confirmed
+	// flat-32K behavior for that case untouched.
+	if (ram_base > 0x8000)
+		space.unmap_readwrite(0x8000, ram_base - 1);
+
 	// Points directly at the RAM device's own buffer -- unlike the
 	// pc1350_state::machine_start() pattern this was originally copied
 	// from (which points m_ram_nvram at an offset into the "maincpu" ROM

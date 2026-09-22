@@ -53,10 +53,32 @@
  *     below (strobe_r/w, serial_r/w, keyboard_line_r/w) since the deeper
  *     per-bit hardware effects (beyond keyboard scanning) aren't needed
  *     for the CPU's own boot-time read-after-write checks to succeed.
- *   - RAM-card address windows by size (also confirmed): 4K =
- *     0xf000-0xffff, 8K = 0xe000-0xffff, 16K = 0xc000-0xffff, 32K =
- *     0x8000-0xffff. machine_start() below now uses exactly this table
- *     instead of the previous made-up tiered windows.
+ *   - RAM-card address windows: machine_start() below computes the window
+ *     generically as (0x10000 - m_ram->size())-0xffff for whatever size is
+ *     configured, and this arithmetic/address-decode is correct for ANY
+ *     size (verified via direct memory probes at every size tried). But
+ *     the ROM's own boot-time card-size DETECTION is not generic: real
+ *     testing (see pocketc.cpp's pc1360() RAM() comment for the full
+ *     writeup) shows it's a short, fixed checklist -- is 0x8000 live? no
+ *     -> is 0xc000 live? no -> is 0xe000 live? no -> is 0xf000 live? --
+ *     checked in that order with no verification that memory just below
+ *     the matched boundary is actually absent, so it only ever concludes
+ *     32K/16K/8K/4K (whichever boundary it hits first), never anything
+ *     else -- confirmed by the fact that a genuine 24K card (real,
+ *     hardware-sourced "MEM B" in claude/pc1360-basic-tokenizer-format.md,
+ *     base 0xA000) gets misdetected as a 16K card by this checklist,
+ *     landing on the exact same (broken) bookkeeping literal 16K does.
+ *     16K/0xc000 IS one of the checklist's own recognized boundaries
+ *     (its cold-boot pointer comes out perfectly self-consistent), yet
+ *     BASIC's MEM command reports 0 bytes free for it regardless -- a
+ *     separate ROM-side bug downstream of detection that this driver has
+ *     no way to reach or fix. pocketc.cpp's pc1360() therefore only
+ *     offers 4K/8K (the checklist's other two recognized boundaries,
+ *     alongside the already-fine 32K default) as RAM() extra_options,
+ *     with 16K removed as confirmed-broken and 24K never added (it would
+ *     just alias to the same broken 16K path here, since this driver has
+ *     no way to give the ROM a genuine card-identity signal the way a
+ *     real S1/S2 slot would -- see "STILL UNVERIFIED" below).
  *   - Addresses 0x0034/0x0038/0x003a/0x003e (sysport_r/sysport_w below)
  *     remain a separate, earlier finding from this driver's own direct ROM
  *     disassembly (not from the knowledgebase, which doesn't cover this

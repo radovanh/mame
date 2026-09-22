@@ -1025,8 +1025,20 @@ static INPUT_PORTS_START( pc1360 )
 	// -- natkeyboard.cpp's generic chording engine itself is untouched.
 	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("SHIFT (paste)") PORT_CHAR(UCHAR_SHIFT_1) PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(pc1360_state::shift_chord_changed), 0)
 
+	// Default changed from 0x01 to 0x07 (2026-09-12): pc1360.cpp's
+	// screen_update()/colortable[] is carried over verbatim from pc1350.cpp
+	// (see the comment at the top of pc1360.cpp), and pc1350's own
+	// INPUT_PORTS_START above already defaults this same DSW0 field to
+	// 0x07 -- but pc1360's copy was left at 0x01, which (confirmed via a
+	// sandbox screenshot sweep of all 8 settings) renders a stark white
+	// background with black text, not the muted pale-green "real LCD" look
+	// every other setting from 4-7 gives. A side-by-side render at 0x07
+	// matches pc1350's own default appearance almost exactly (same pale
+	// minty-green background, same dark text) -- confirmed visually, not
+	// just by analogy -- so this now matches pc1350's default rather than
+	// diverging from it for no documented reason.
 	PORT_START("DSW0")
-	PORT_DIPNAME( 0x07, 0x01, "Contrast")
+	PORT_DIPNAME( 0x07, 0x07, "Contrast")
 	PORT_DIPSETTING(    0x00, "0/Low" )
 	PORT_DIPSETTING(    0x01, "1" )
 	PORT_DIPSETTING(    0x02, "2" )
@@ -1273,21 +1285,88 @@ void pc1360_state::pc1360(machine_config &config)
 	m_screen->set_visarea(0, 640-1, 0, 252-1);
 	m_screen->set_screen_update(FUNC(pc1360_state::screen_update));
 
-	/* CORRECTED: the previous "4K default, 8K/16K/32K RAM card options"
-	   scheme was wrong -- it modeled 0x8000-0xffff as only partially
-	   populated depending on RAM card size, with the rest of that window
-	   nop_readwrite'd. Two independent pieces of evidence contradict that:
-	   (1) the user directly tested address 0xe030 with the real device's
-	   debugger (load/FILL) and confirmed it is live, writable RAM there;
-	   (2) Pokecom Go, a confirmed-working reference PC-1360 emulator using
-	   the same ROM dumps, maps the entire 0x8000-0xffff range as one flat
-	   always-present 32K mainram[] array -- its optional "RAM card" bank
-	   feature (bankcram) exists in the source but is disabled/unused. The
-	   "RAM CARD S1/S2 CLEAR O.K.?" boot prompt is therefore about
-	   confirming a memory-clear operation, not gating whether this address
-	   window is populated at all. Fixed at a flat 32K -- see
-	   pc1360_state::machine_start() in pc1360_m.cpp. */
-	RAM(config, m_ram).set_default_size("32K");
+	/* CORRECTED (this fix is about the previously-selected size being only
+	   partially backed, NOT about which sizes are offered -- see the
+	   set_extra_options() re-added below, which is a separate, later
+	   change): the previous "4K default, 8K/16K/32K RAM card options"
+	   scheme was wrong because whatever size was actually selected got
+	   nop_readwrite'd outside a too-small hardcoded window instead of
+	   being backed all the way to 0xffff. Two independent pieces of
+	   evidence contradict that: (1) the user directly tested address
+	   0xe030 with the real device's debugger (load/FILL) and confirmed it
+	   is live, writable RAM there; (2) Pokecom Go, a confirmed-working
+	   reference PC-1360 emulator using the same ROM dumps, maps the
+	   entire 0x8000-0xffff range as one flat always-present 32K
+	   mainram[] array -- its optional "RAM card" bank feature (bankcram)
+	   exists in the source but is disabled/unused. The "RAM CARD S1/S2
+	   CLEAR O.K.?" boot prompt is therefore about confirming a
+	   memory-clear operation, not gating whether this address window is
+	   populated at all. Fixed by always installing RAM at
+	   (0x10000 - m_ram->size())-0xffff -- see pc1360_state::machine_start()
+	   in pc1360_m.cpp, which already computes that generically for
+	   whatever size is configured (not just 32K).
+
+	   Single-card size options re-added 2026-09-12, then CORRECTED twice
+	   the same day. The address-space side (machine_start() installing
+	   RAM generically at (0x10000-m_ram->size())-0xffff, and unmapping
+	   everything below that for a card smaller than 32K -- see
+	   pc1360_m.cpp) is solid, verified byte-for-byte for every size tried.
+	   The problem is entirely upstream of that, in how the ROM itself
+	   decides what size card is fitted:
+
+	   Radovan reported BASIC's own MEM command shows 0 bytes free with
+	   16K selected. Direct Lua memory probes confirmed the 0xc000-0xffff
+	   address window itself is perfectly correct for that size -- so the
+	   bug isn't the memory map. Reading the program-start pointer
+	   (&FFD7/&FFD8) the ROM itself writes at cold boot for every size
+	   (via space:read_u8 in a Lua script, no BASIC typing needed) showed
+	   it always computes exactly (ram_base + 0x30) -- 0xf030/0xe030/
+	   0xc030/0x8030 for 4K/8K/16K/32K respectively -- which at first
+	   looked like a working, size-generic ROM probe. It isn't: a follow-up
+	   test with a 24K RAM() size (base 0xA000, matching "MEM B" in
+	   claude/pc1360-basic-tokenizer-format.md, a real hardware-confirmed
+	   Sharp card) landed on the SAME 0xc030 pointer as literal 16K, even
+	   though the live memory genuinely starts at 0xA000 (confirmed by
+	   probing 0xa000/0xbfff/0xc000 directly). That only makes sense if the
+	   ROM's own boot-time detection is a short, fixed checklist -- "is
+	   0x8000 live? no -> is 0xc000 live? yes -> it's a 16K card, stop" --
+	   checked in exactly that order (32K, 16K, 8K, 4K) with no check that
+	   memory just below the matched boundary is actually absent. A real
+	   24K card's memory (0xA000-0xFFFF) makes 0xC000 look live too, so the
+	   ROM mistakes it for a 16K card and computes the exact same (wrong)
+	   bookkeeping -- meaning a 24K RAM() option would be just as broken as
+	   16K here, not a fix for it, despite 24K being the one with real
+	   hardware provenance. Emulating "MEM B" correctly would need the ROM
+	   to see an actual card-identity signal the way real hardware's S1/S2
+	   slots provide one, not just a bigger memory window -- exactly the
+	   two-slot modeling already deferred below.
+
+	   So: 16K is a boundary the ROM's checklist *does* recognize (that's
+	   why the pointer comes out self-consistent), yet MEM still reports 0
+	   -- a further bug downstream of detection, in whatever table the ROM
+	   consults for the free-byte count itself, that this driver can't
+	   reach or fix. Since selecting it produces a visibly broken result,
+	   it's dropped from the options below. 4K and 8K are left in --
+	   they're the same kind of ROM-recognized checklist boundary as the
+	   already-fine 32K default, so they're the best remaining candidates
+	   for actually working, even though only 8K has real independent
+	   confirmation ("MEM C" in the doc above) and neither has yet been
+	   confirmed correct via an actual MEM readout (Radovan's own real
+	   build is a much more reliable way to check that than this sandbox,
+	   whose keyboard-matrix simulation is fragile for multi-key BASIC
+	   input -- see chat). Worth re-testing 4K/8K's MEM output for real
+	   before trusting them further.
+
+	   This covers only "one card of a chosen size in the single modeled
+	   window"; it is NOT the same as real two-slot (S1+S2) RAM-card
+	   support, which would need two independent RAM devices plus wiring
+	   Port C bit 2 ("BA") to bank-switch between them, AND some way to
+	   feed the ROM a real card-identity signal instead of relying on its
+	   address-boundary checklist -- still unimplemented, still flagged in
+	   pc1360.h's "STILL UNVERIFIED" section, and deliberately deferred
+	   until the real address combinations for two simultaneously-fitted
+	   cards are confirmed against actual hardware. */
+	RAM(config, m_ram).set_default_size("32K").set_extra_options("4K,8K");
 
 	// Direct-memory BASIC-program injection -- see the identical comment
 	// in pc1350() above; pc1360_m.cpp's quickload_cb() has the PC-1360-
