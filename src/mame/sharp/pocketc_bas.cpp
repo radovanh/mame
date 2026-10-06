@@ -190,19 +190,28 @@ struct model_traits
 	const keyword *table;
 	size_t table_len;
 	bool two_byte;
+	// true: jump targets after GOTO/GOSUB/THEN (and ON...GOTO/GOSUB lists)
+	// are stored as 0x1F + 16-bit big-endian binary line number
+	// (IDENT_EXT_BAS / IDENT_E_BAS machines: PC-1360, PC-E500, PC-G8xx).
+	// false: they stay plain ASCII digits like any other numeric literal
+	// (IDENT_NEW_BAS machines: PC-1350, PC-1260, PC-1401/1403...). The ROM
+	// on those older machines has no idea what 0x1F means -- LIST shows the
+	// jump keyword with the number missing (the 0x00 high byte) or a stray
+	// character, and GOTO/GOSUB fail at run time.
+	bool binary_line_refs;
 	uint16_t rem_tok, goto_tok, gosub_tok, then_tok, on_tok;
 };
 
 const model_traits &traits_for(model m)
 {
-	static const model_traits k1350{ pc1350_keywords, std::size(pc1350_keywords), false,
+	static const model_traits k1350{ pc1350_keywords, std::size(pc1350_keywords), false, false,
 		0xD7, 0xC6, 0xE0, 0xD2, 0xD3 };
-	static const model_traits k1360{ pc1360_keywords, std::size(pc1360_keywords), true,
+	static const model_traits k1360{ pc1360_keywords, std::size(pc1360_keywords), true, true,
 		0xFE59, 0xFE2B, 0xFE62, 0xFE54, 0xFE55 };
 	// REM/GOTO/GOSUB/THEN/ON all come from the block shared with PC-1360's
 	// table (see pcg_keywords above), so the PCG family's special token
 	// values are identical to PC-1360's.
-	static const model_traits kpcg{ pcg_keywords, std::size(pcg_keywords), true,
+	static const model_traits kpcg{ pcg_keywords, std::size(pcg_keywords), true, true,
 		0xFE59, 0xFE2B, 0xFE62, 0xFE54, 0xFE55 };
 
 	switch (m)
@@ -406,10 +415,13 @@ bool tokenize_program(model m, const std::string &source, std::vector<uint8_t> &
 					content.push_back((uint8_t)token);
 				}
 
-				if (token == t.on_tok)
-					in_on_list = true;
-				if (token == t.goto_tok || token == t.gosub_tok || token == t.then_tok)
-					expect_line_ref = true;
+				if (t.binary_line_refs)
+				{
+					if (token == t.on_tok)
+						in_on_list = true;
+					if (token == t.goto_tok || token == t.gosub_tok || token == t.then_tok)
+						expect_line_ref = true;
+				}
 
 				p += matched_len;
 				continue;
