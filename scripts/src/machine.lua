@@ -717,6 +717,18 @@ end
 
 ---------------------------------------------------
 --
+--@src/devices/machine/adbhost.h,MACHINES["ADBHOST"] = true
+---------------------------------------------------
+
+if MACHINES["ADBHOST"] then
+	files {
+		MAME_DIR .. "src/devices/machine/adbhost.cpp",
+		MAME_DIR .. "src/devices/machine/adbhost.h",
+	}
+end
+
+---------------------------------------------------
+--
 --@src/devices/machine/adc0804.h,MACHINES["ADC0804"] = true
 ---------------------------------------------------
 
@@ -844,6 +856,18 @@ if MACHINES["AM79C90"] then
 	files {
 		MAME_DIR .. "src/devices/machine/am79c90.cpp",
 		MAME_DIR .. "src/devices/machine/am79c90.h",
+	}
+end
+
+---------------------------------------------------
+--
+--@src/devices/machine/am79c940.h,MACHINES["AM79C940"] = true
+---------------------------------------------------
+
+if MACHINES["AM79C940"] then
+	files {
+		MAME_DIR .. "src/devices/machine/am79c940.cpp",
+		MAME_DIR .. "src/devices/machine/am79c940.h",
 	}
 end
 
@@ -1099,6 +1123,29 @@ if MACHINES["CHESSMACHINE"] then
 	}
 end
 
+---------------------------------------------------
+--
+--@src/devices/machine/clps6700.h,MACHINES["CLPS6700"] = true
+---------------------------------------------------
+
+if MACHINES["CLPS6700"] then
+	files {
+		MAME_DIR .. "src/devices/machine/clps6700.cpp",
+		MAME_DIR .. "src/devices/machine/clps6700.h",
+	}
+end
+
+---------------------------------------------------
+--
+--@src/devices/machine/clps7110.h,MACHINES["CLPS7110"] = true
+---------------------------------------------------
+
+if MACHINES["CLPS7110"] then
+	files {
+		MAME_DIR .. "src/devices/machine/clps7110.cpp",
+		MAME_DIR .. "src/devices/machine/clps7110.h",
+	}
+end
 
 ---------------------------------------------------
 --
@@ -1522,6 +1569,18 @@ if MACHINES["FGA002"] then
 	files {
 		MAME_DIR .. "src/devices/machine/fga002.cpp",
 		MAME_DIR .. "src/devices/machine/fga002.h",
+	}
+end
+
+---------------------------------------------------
+--
+--@src/devices/machine/fs8806.h,MACHINES["FS8806"] = true
+---------------------------------------------------
+
+if MACHINES["FS8806"] then
+	files {
+		MAME_DIR .. "src/devices/machine/fs8806.cpp",
+		MAME_DIR .. "src/devices/machine/fs8806.h",
 	}
 end
 
@@ -2605,6 +2664,18 @@ end
 
 ---------------------------------------------------
 --
+--@src/devices/machine/mpeg_demux.h,MACHINES["MPEG_DEMUX"] = true
+--------------------------------------------------
+
+if MACHINES["MPEG_DEMUX"] then
+	files {
+		MAME_DIR .. "src/devices/machine/mpeg_demux.cpp",
+		MAME_DIR .. "src/devices/machine/mpeg_demux.h",
+	}
+end
+
+--------------------------------------------------
+--
 --@src/devices/machine/mm5307.h,MACHINES["MM5307"] = true
 ---------------------------------------------------
 
@@ -2882,6 +2953,18 @@ if MACHINES["PCF8583"] then
 	files {
 		MAME_DIR .. "src/devices/machine/pcf8583.cpp",
 		MAME_DIR .. "src/devices/machine/pcf8583.h",
+	}
+end
+
+---------------------------------------------------
+--
+--@src/devices/machine/mk3835.h,MACHINES["MK3835"] = true
+---------------------------------------------------
+
+if MACHINES["MK3835"] then
+	files {
+		MAME_DIR .. "src/devices/machine/mk3835.cpp",
+		MAME_DIR .. "src/devices/machine/mk3835.h",
 	}
 end
 
@@ -3371,6 +3454,18 @@ if MACHINES["S2636"] then
 	files {
 		MAME_DIR .. "src/devices/machine/s2636.cpp",
 		MAME_DIR .. "src/devices/machine/s2636.h",
+	}
+end
+
+---------------------------------------------------
+--
+--@src/devices/machine/s35180.h,MACHINES["S35180"] = true
+---------------------------------------------------
+
+if MACHINES["S35180"] then
+	files {
+		MAME_DIR .. "src/devices/machine/s35180.cpp",
+		MAME_DIR .. "src/devices/machine/s35180.h",
 	}
 end
 
@@ -4171,6 +4266,18 @@ end
 
 ---------------------------------------------------
 --
+--@src/devices/machine/wd1015.h,MACHINES["WD1015"] = true
+---------------------------------------------------
+
+if MACHINES["WD1015"] then
+	files {
+		MAME_DIR .. "src/devices/machine/wd1015.cpp",
+		MAME_DIR .. "src/devices/machine/wd1015.h",
+	}
+end
+
+---------------------------------------------------
+--
 --@src/devices/machine/wd1002_hd0.h,MACHINES["WD1002_HD0"] = true
 ---------------------------------------------------
 
@@ -4287,6 +4394,18 @@ if MACHINES["X76F100"] then
 	files {
 		MAME_DIR .. "src/devices/machine/x76f100.cpp",
 		MAME_DIR .. "src/devices/machine/x76f100.h",
+	}
+end
+
+---------------------------------------------------
+--
+--@src/devices/machine/xn297l.h,MACHINES["XN297L"] = true
+---------------------------------------------------
+
+if MACHINES["XN297L"] then
+	files {
+		MAME_DIR .. "src/devices/machine/xn297l.cpp",
+		MAME_DIR .. "src/devices/machine/xn297l.h",
 	}
 end
 
@@ -5501,6 +5620,39 @@ if MACHINES["BITMAP_PRINTER"] then
 	files {
 		MAME_DIR .. "src/devices/machine/bitmap_printer.cpp",
 		MAME_DIR .. "src/devices/machine/bitmap_printer.h",
+	}
+end
+
+---------------------------------------------------
+--
+--@src/devices/machine/unihammer.h,MACHINES["UNIHAMMER"] = true
+---------------------------------------------------
+if MACHINES["UNIHAMMER"] then
+	files {
+		MAME_DIR .. "src/devices/machine/unihammer.cpp",
+		MAME_DIR .. "src/devices/machine/unihammer.h",
+	}
+end
+
+---------------------------------------------------
+--
+--@src/devices/machine/alpsdpg23.h,MACHINES["ALPSDPG23"] = true
+---------------------------------------------------
+if MACHINES["ALPSDPG23"] then
+	files {
+		MAME_DIR .. "src/devices/machine/alpsdpg23.cpp",
+		MAME_DIR .. "src/devices/machine/alpsdpg23.h",
+	}
+end
+
+---------------------------------------------------
+--
+--@src/devices/machine/citizen120d.h,MACHINES["CITIZEN120D"] = true
+---------------------------------------------------
+if MACHINES["CITIZEN120D"] then
+	files {
+		MAME_DIR .. "src/devices/machine/citizen120d.cpp",
+		MAME_DIR .. "src/devices/machine/citizen120d.h",
 	}
 end
 

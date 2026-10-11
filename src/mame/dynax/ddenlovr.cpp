@@ -814,6 +814,7 @@ public:
 	void daireach(machine_config &config) ATTR_COLD;
 	void hnrose(machine_config &config) ATTR_COLD;
 	void mjswacads(machine_config &config) ATTR_COLD;
+	void mjtktrdx(machine_config &config) ATTR_COLD;
 
 private:
 	DECLARE_MACHINE_START(hanakanz);
@@ -869,6 +870,7 @@ private:
 	void mjnigiri_portmap(address_map &map) ATTR_COLD;
 	void mjreach1_portmap(address_map &map) ATTR_COLD;
 	void mjswacads_portmap(address_map &map) ATTR_COLD;
+	void mjtktrdx_portmap(address_map &map) ATTR_COLD;
 	void momotaro_portmap(address_map &map) ATTR_COLD;
 
 	memory_share_creator<uint8_t> m_banked_nvram;
@@ -4988,7 +4990,7 @@ void hanakanz_state::daireach_portmap(address_map &map)
 	map(0x38, 0x38).nopr();         // ? ack or watchdog
 	map(0x40, 0x41).w(FUNC(hanakanz_state::ddenlovr_blitter_w));
 	map(0x43, 0x43).r(FUNC(hanakanz_state::ddenlovr_gfxrom_r));
-	map(0x60, 0x60).rw("aysnd", FUNC(ay8910_device::data_r),FUNC(ay8910_device::address_w));   // dsw
+	map(0x60, 0x60).rw("aysnd", FUNC(ay8910_device::data_r), FUNC(ay8910_device::address_w));   // dsw
 	map(0x62, 0x62).w("aysnd", FUNC(ay8910_device::data_w));
 	map(0x64, 0x65).w("ym2413", FUNC(ym2413_device::write));
 	map(0x66, 0x66).rw(m_oki, FUNC(okim6295_device::read), FUNC(okim6295_device::write));
@@ -5001,6 +5003,36 @@ void hanakanz_state::daireach_portmap(address_map &map)
 	map(0x74, 0x74).r(FUNC(hanakanz_state::daimyojn_keyb2_r));
 	map(0x78, 0x78).w(FUNC(hanakanz_state::mjchuuka_oki_bank_w));
 	map(0x7e, 0x7e).w(FUNC(hanakanz_state::seljan2_palette_enab_w));    // writes: 1 = palette RAM at b000, 0 = ROM
+}
+
+void hanakanz_state::mjtktrdx_portmap(address_map &map)
+{
+	map.global_mask(0xff);
+	map(0x00, 0x0f).rw("rtc", FUNC(msm6242_device::read), FUNC(msm6242_device::write));
+	map(0x20, 0x23).w(FUNC(hanakanz_state::ddenlovr_palette_base_w));
+	map(0x24, 0x27).w(FUNC(hanakanz_state::ddenlovr_palette_mask_w));
+	map(0x28, 0x2b).w(FUNC(hanakanz_state::ddenlovr_transparency_pen_w));
+	map(0x2c, 0x2f).w(FUNC(hanakanz_state::ddenlovr_transparency_mask_w));
+	map(0x34, 0x34).w(FUNC(hanakanz_state::ddenlovr_bgcolor_w));
+	map(0x35, 0x35).w(FUNC(hanakanz_state::ddenlovr_priority_w));
+	map(0x36, 0x36).w(FUNC(hanakanz_state::ddenlovr_layer_enable_w));
+	map(0x38, 0x38).nopr();         // ? ack or watchdog
+	map(0x40, 0x41).w(FUNC(hanakanz_state::ddenlovr_blitter_w));
+	map(0x43, 0x43).r(FUNC(hanakanz_state::ddenlovr_gfxrom_r));
+	map(0x58, 0x58).w("aysnd", FUNC(ay8910_device::address_w));
+	map(0x5c, 0x5c).rw("aysnd", FUNC(ay8910_device::data_r), FUNC(ay8910_device::data_w));
+	map(0x50, 0x51).w("ym2413", FUNC(ym2413_device::write));
+	map(0x54, 0x54).rw(m_oki, FUNC(okim6295_device::read), FUNC(okim6295_device::write));
+	map(0x60, 0x60).w(FUNC(hanakanz_state::mjflove_rombank_w));
+	map(0x70, 0x70).nopr().w(FUNC(hanakanz_state::sryudens_rambank_w));
+	map(0xa0, 0xa0).r(FUNC(hanakanz_state::hanakanz_rand_r));
+	map(0xb0, 0xb0).r(FUNC(hanakanz_state::technotop_protection_r<0x10>)),
+	map(0xec, 0xec).w(FUNC(hanakanz_state::protection_w));
+	map(0x80, 0x80).portr("SYSTEM");
+	map(0x84, 0x84).r(FUNC(hanakanz_state::daimyojn_keyb1_r));
+	map(0x88, 0x88).r(FUNC(hanakanz_state::daimyojn_keyb2_r));
+	map(0x90, 0x90).w(FUNC(hanakanz_state::mjchuuka_oki_bank_w));
+	map(0xe8, 0xe8).w(FUNC(hanakanz_state::seljan2_palette_enab_w));    // writes: 1 = palette RAM at b000, 0 = ROM
 }
 
 /***************************************************************************
@@ -10752,6 +10784,13 @@ void hanakanz_state::daireach(machine_config &config)
 	MCFG_VIDEO_START_OVERRIDE(hanakanz_state, ddenlovr)
 }
 
+void hanakanz_state::mjtktrdx(machine_config &config)
+{
+	seljan2(config);
+
+	m_maincpu->set_addrmap(AS_IO, &hanakanz_state::mjtktrdx_portmap);
+}
+
 /***************************************************************************
                             Mahjong Daimyojin
 ***************************************************************************/
@@ -11936,6 +11975,22 @@ ROM_START( mjchuuka )
 	ROM_LOAD( "d12101.1b", 0x00000, 0x80000, CRC(9759c65e) SHA1(cf098c07616b6d2a2ba10ff6ae0006442b675326) )
 ROM_END
 
+ROM_START( mjchuukac ) // Dynax D1200415 PCB. All labels peeled off.
+	ROM_REGION( 0x80000, "maincpu", 0 )  // Z80 Code
+	ROM_LOAD( "rom.4b", 0x00000, 0x80000, NO_DUMP ) // no consistent read
+
+	ROM_REGION( 0x300000, "blitter", ROMREGION_ERASEFF ) // all dumped ROMs same as mjchuuka
+	ROM_LOAD16_BYTE( "rom.9c",  0x000000, 0x080000, CRC(83bfc841) SHA1(36547e737244f95004c598adeb46cebce9ab3231) )
+	ROM_LOAD16_BYTE( "rom.9a",  0x000001, 0x080000, CRC(1bf6220a) SHA1(ea18fdf6e1298a3b4c91fbf6219b1edcfecaeca3) )
+	ROM_LOAD16_BYTE( "rom.10c", 0x100000, 0x080000, CRC(3424c8ac) SHA1(ee48622b478d39c6bdb5a18cab204e14f7d54f7a) )
+	ROM_LOAD16_BYTE( "rom.10a", 0x100001, 0x080000, CRC(9052bd09) SHA1(3e8e32dea6c0cea895b7f16883e500e487689e72) )
+	ROM_LOAD(        "rom.11c", 0x280000, 0x040000, NO_DUMP ) // damaged
+	// flying wire from 11c to 11a empty socket (possibly 11c is already interleaved)
+
+	ROM_REGION( 0x80000, "oki", 0 )  // samples
+	ROM_LOAD( "rom.1b", 0x00000, 0x80000, CRC(8d0bace1) SHA1(b84588c9503f718f165445e3a639962024d221e8) )
+ROM_END
+
 
 /***************************************************************************
 
@@ -13088,6 +13143,20 @@ ROM_START( daireach )
 	ROM_LOAD( "01201.1c", 0x00000, 0x80000, CRC(9a638bc8) SHA1(c584ea5f8fcfc03fd8e04a5da182388d8a707df1) )
 ROM_END
 
+// 麻雀竹取伝説Deluxe
+ROM_START( mjtktrdx )
+	ROM_REGION( 0x90000+0x8000+16*0x1000, "maincpu", 0 )  // Z80 Code
+	ROM_LOAD( "p0222m4.4c", 0x00000, 0x80000, CRC(b19d1658) SHA1(e8d3e15a54775b4fad9e5228c2333fa3aff93832) )
+	ROM_RELOAD(             0x10000, 0x80000 )
+
+	ROM_REGION( 0x600000, "blitter", 0 )
+	ROM_LOAD( "t02231.11c", 0x000000, 0x200000, CRC(b4384b4e) SHA1(a9c418b2fcf02448559c37f68536b7b381197802) )
+	ROM_LOAD( "t0224.sub",  0x200000, 0x200000, CRC(939b4d96) SHA1(8b601b3887ee250821efe37d36d3a2248fc6753b) ) // on sub board
+
+	ROM_REGION( 0x100000, "oki", 0 )
+	ROM_LOAD( "t0221.1c", 0x000000, 0x100000, CRC(d008e519) SHA1(3f9b953533b56c909ebf766187bfb36496906bd0) ) // 1ST AND 2ND HALF IDENTICAL
+ROM_END
+
 /***************************************************************************
 
 Mahjong Gorgeous Night
@@ -13677,6 +13746,7 @@ GAME( 1997, mjmysterr,   0,        mjmyorntr, mjschuka,   ddenlovr_state, empty_
 GAME( 1997, hkagerou,    0,        hkagerou,  hkagerou,   hanakanz_state, empty_init,    ROT0, "Nakanihon / Dynax",                           "Hana Kagerou (Japan)",                                           MACHINE_NO_COCKTAIL  )
 
 GAME( 1998, mjchuuka,    0,        mjchuuka,  mjchuuka,   hanakanz_state, empty_init,    ROT0, "Dynax",                                       "Maque Zhonghua Ernu (Taiwan)",                                   MACHINE_NO_COCKTAIL  )
+GAME( 1998, mjchuukac,   mjchuuka, mjchuuka,  mjchuuka,   hanakanz_state, empty_init,    ROT0, "Dynax",                                       "Mahjong Chuuka Ken (China?)",                                    MACHINE_NOT_WORKING | MACHINE_NO_COCKTAIL  ) // one bad ROM
 
 GAME( 1998, mjreach1,    0,        mjreach1,  mjreach1,   hanakanz_state, empty_init,    ROT0, "Nihon System",                                "Mahjong Reach Ippatsu (Japan, NM526-NSI)",                       MACHINE_NO_COCKTAIL  )
 GAME( 1998, mjreach1a,   mjreach1, mjreach1,  mjreach1,   hanakanz_state, empty_init,    ROT0, "Nihon System",                                "Mahjong Reach Ippatsu (Japan, NM526-01)",                        MACHINE_NO_COCKTAIL  )
@@ -13697,13 +13767,15 @@ GAME( 2000, jongoh,      0,        jongoh,    jongoh,     ddenlovr_state, empty_
 GAME( 2001, daireach,    0,        daireach,  seljan2,    hanakanz_state, empty_init,    ROT0, "Techno-Top",                                  "Mahjong Dai-Reach (Japan, TSM012-C01)",                          MACHINE_NOT_WORKING | MACHINE_NO_COCKTAIL )
 
 GAME( 2002, daichuka,    0,        daichuka,  jongoh,     ddenlovr_state, empty_init,    ROT0, "Techno-Top",                                  "Mahjong Dai Chuuka Ken (Japan, P830 006A-005)",                  MACHINE_NOT_WORKING | MACHINE_NO_COCKTAIL ) // bad dump
-GAME( 2002, daichukaa,   daichuka, daichukaa, jongoh,     ddenlovr_state, empty_init,    ROT0, "Techno-Top",                                  "Mahjong Dai Chuuka Ken (Japan, P830-004A-004)",                  MACHINE_NOT_WORKING | MACHINE_NO_COCKTAIL ) // stuck at the operator control check
+GAME( 2002, daichukaa,   daichuka, daichukaa, jongoh,     ddenlovr_state, empty_init,    ROT0, "Techno-Top",                                  "Mahjong Dai Chuuka Ken (Japan, P830-004A-004)",                  MACHINE_NOT_WORKING | MACHINE_NO_COCKTAIL ) // stuck at the operator control check, needs correct NVRAM support
 
 GAME( 2002, daimyojn,    0,        daimyojn,  daimyojn,   hanakanz_state, empty_init,    ROT0, "Dynax / Techno-Top / Techno-Planning",        "Mahjong Daimyojin (Japan, T017-PB-00)",                          MACHINE_NO_COCKTAIL  )
 
 GAME( 2002, mjswacads,   0,        mjswacads, daimyojn,   hanakanz_state, empty_init,    ROT0, "Techno-Top / Long Stone",                     "Mahjong Sweet Academy Special (Japan, P010B-Y05)",               MACHINE_NOT_WORKING | MACHINE_NO_COCKTAIL ) // needs verifying of inputs, outputs
 
-GAME( 2002, mjtenho,     0,        daimyojn,  daimyojn,   hanakanz_state, empty_init,    ROT0, "Techno-Top",                                  "Mahjong Tenho (Japan, P016B-000)",                               MACHINE_NOT_WORKING | MACHINE_NO_COCKTAIL  )
+GAME( 2002, mjtenho,     0,        daimyojn,  daimyojn,   hanakanz_state, empty_init,    ROT0, "Techno-Top",                                  "Mahjong Tenho (Japan, P016B-000)",                               MACHINE_NOT_WORKING | MACHINE_NO_COCKTAIL )
+
+GAME( 2003, mjtktrdx,    0,        mjtktrdx,  seljan2,    hanakanz_state, empty_init,    ROT0, "Techno-Top",                                  "Mahjong Taketori Densetsu Deluxe (Japan, T022-PC-004)",          MACHINE_NOT_WORKING | MACHINE_NO_COCKTAIL ) // stuck at the operator control check, needs correct NVRAM support
 
 GAME( 2004, momotaro,    0,        momotaro,  daimyojn,   hanakanz_state, empty_init,    ROT0, "Techno-Top",                                  "Mahjong Momotarou (Japan, T027-RB-01)",                          MACHINE_NO_COCKTAIL  | MACHINE_IMPERFECT_GRAPHICS | MACHINE_NOT_WORKING )
 

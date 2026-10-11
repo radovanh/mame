@@ -20,13 +20,15 @@
 #include "bandit.h"
 #include "cuda.h"
 #include "heathrow.h"
-#include "macadb.h"
 #include "platinum.h"
 
+#include "bus/adb/adb.h"
+#include "bus/adb/cards.h"
 #include "bus/nscsi/cd.h"
 #include "bus/nscsi/devices.h"
 #include "bus/pci/pci_slot.h"
 #include "cpu/powerpc/ppc.h"
+#include "machine/am79c940.h"
 #include "machine/input_merger.h"
 #include "machine/ncr53c90.h"
 #include "machine/nvram.h"
@@ -59,6 +61,7 @@ public:
 	catalyst_state(const machine_config &mconfig, device_type type, const char *tag);
 
 protected:
+	virtual void device_reset() override ATTR_COLD;
 	virtual void machine_start() override ATTR_COLD;
 	virtual void machine_reset() override ATTR_COLD;
 
@@ -73,10 +76,11 @@ private:
 	void nvram_data_w(offs_t offset, u32 data, u32 mem_mask);
 
 	u32 machine_id_r(offs_t offset, u32 mem_mask);
+	u8 enet_prom_r(offs_t offset);
 
 	void slot_irq_handler(int line, int state);
 
-	required_device<ppc_device> m_maincpu;
+	required_device<ppc601_device> m_maincpu;
 	required_device<pci_root_device> m_pci_root;
 	required_device<bandit_host_device> m_bandit;
 	required_device<grandcentral_device> m_grandcentral;
@@ -84,12 +88,15 @@ private:
 	required_device<platinum_device> m_platinum;
 	required_device<nscsi_bus_device> m_scsibus;
 	required_device<ncr53cf94_device> m_ncr53c94;
-	required_device<macadb_device> m_macadb;
+	required_device<am79c940_device> m_mace;
+	required_device<adb_bus_device> m_adbbus;
 	required_device<nvram_device> m_nvram;
 	required_device<ram_device> m_ram;
 
 	u32 m_nvram_addr;
 	u8 m_nvram_data[0x2000];
+	std::array<u8, 8> m_enet_prom;
+	bool m_enet_prom_initialized;
 };
 
 catalyst_state::catalyst_state(const machine_config &mconfig, device_type type, const char *tag) :
@@ -102,9 +109,12 @@ catalyst_state::catalyst_state(const machine_config &mconfig, device_type type, 
 	m_platinum(*this, "platinum"),
 	m_scsibus(*this, "scsi"),
 	m_ncr53c94(*this, "ncr53c94"),
-	m_macadb(*this, "macadb"),
+	m_mace(*this, "mace"),
+	m_adbbus(*this, "adb"),
 	m_nvram(*this, "nvram"),
-	m_ram(*this, RAM_TAG)
+	m_ram(*this, RAM_TAG),
+	m_enet_prom{},
+	m_enet_prom_initialized(false)
 {
 }
 
@@ -116,6 +126,25 @@ void catalyst_state::machine_start()
 	m_platinum->set_maincpu_space(&m_maincpu->space(AS_PROGRAM));
 
 	m_pci_root->set_irq_handler(pci_irq_handler(*this, FUNC(catalyst_state::slot_irq_handler)));
+
+	const u32 suffix = machine().rand();
+	const u8 mac[6] = { 0x00, 0x00, 0x1b, u8(suffix >> 16), u8(suffix >> 8), u8(suffix) };
+	m_mace->set_mac(mac);
+	save_item(NAME(m_enet_prom));
+	save_item(NAME(m_enet_prom_initialized));
+}
+
+void catalyst_state::device_reset()
+{
+	if (!m_enet_prom_initialized)
+	{
+		// Capture the configured address before MACE reset republishes PADR.
+		std::copy(m_mace->get_mac().begin(), m_mace->get_mac().end(), m_enet_prom.begin());
+		m_enet_prom[7] = 0xff;
+		for (unsigned i = 0; i < 6; ++i)
+			m_enet_prom[7] ^= m_enet_prom[i];
+		m_enet_prom_initialized = true;
+	}
 }
 
 void catalyst_state::machine_reset()
@@ -190,6 +219,13 @@ void catalyst_state::slot_irq_handler(int line, int state)
 	}
 }
 
+u8 catalyst_state::enet_prom_r(offs_t offset)
+{
+	// Unlike the Quadra AV and PDM PROM, Curio on this board presents bytes
+	// directly: the 7200 ROM copies them to PADR without reversing the bits.
+	return m_enet_prom[offset & 7];
+}
+
 /* Input ports */
 static INPUT_PORTS_START( pm7200 )
 INPUT_PORTS_END
@@ -197,6 +233,7 @@ INPUT_PORTS_END
 void catalyst_state::pm7200(machine_config &config)
 {
 	PPC601(config, m_maincpu, 75_MHz_XTAL);
+	m_maincpu->set_rtc_clock(31.3344_MHz_XTAL / 4);
 	m_maincpu->ppcdrc_set_options(PPCDRC_COMPATIBLE_OPTIONS | PPCDRC_MACOS_CACHE_HACK);
 	m_maincpu->set_addrmap(AS_PROGRAM, &catalyst_state::pm7200_map);
 
@@ -262,6 +299,16 @@ void catalyst_state::pm7200(machine_config &config)
 	m_grandcentral->scsi0_w_callback().set(m_ncr53c94, FUNC(ncr53c94_device::write));
 	m_grandcentral->scsi0_dma_r_callback().set(m_ncr53c94, FUNC(ncr53c94_device::dma16_r));
 	m_grandcentral->scsi0_dma_w_callback().set(m_ncr53c94, FUNC(ncr53c94_device::dma16_w));
+	m_grandcentral->set_scsi0_drq_status_bit(5);
+
+	AM79C940(config, m_mace);
+	m_mace->irq_out().set(m_grandcentral, FUNC(grandcentral_device::enet_irq));
+	m_mace->tx_drq_out().set(m_grandcentral, FUNC(grandcentral_device::enet_tx_drq));
+	m_mace->rx_drq_out().set(m_grandcentral, FUNC(grandcentral_device::enet_rx_drq));
+	m_grandcentral->enet_r_callback().set(m_mace, FUNC(am79c940_device::read));
+	m_grandcentral->enet_w_callback().set(m_mace, FUNC(am79c940_device::write));
+	m_grandcentral->enet_prom_r_callback().set(FUNC(catalyst_state::enet_prom_r));
+	m_grandcentral->set_mace_tag(m_mace);
 
 	SOFTWARE_LIST(config, "flop_mac35_orig").set_original("mac_flop_orig");
 	SOFTWARE_LIST(config, "flop_mac35_clean").set_original("mac_flop_clcracked");
@@ -274,15 +321,18 @@ void catalyst_state::pm7200(machine_config &config)
 	awacs.add_route(0, "speaker", 1.0, 0);
 	awacs.add_route(1, "speaker", 1.0, 1);
 
-	MACADB(config, m_macadb, 15.6672_MHz_XTAL);
+	ADB_BUS(config, m_adbbus);
+	ADB_CONNECTOR(config, "adb:0", adb_devices, "hle_keyboard");
+	ADB_CONNECTOR(config, "adb:1", adb_devices, "hle_mouse");
 
 	CUDA_V2XX(config, m_cuda, XTAL(32'768));
 	m_cuda->set_default_bios_tag("341s0060");
 	m_cuda->reset_callback().set(FUNC(catalyst_state::cuda_reset_w));
-	m_cuda->linechange_callback().set(m_macadb, FUNC(macadb_device::adb_linechange_w));
+	m_cuda->linechange_callback().set(m_adbbus, FUNC(adb_bus_device::adb_host_line_w));
 	m_cuda->via_clock_callback().set(m_grandcentral, FUNC(heathrow_device::cb1_w));
 	m_cuda->via_data_callback().set(m_grandcentral, FUNC(heathrow_device::cb2_w));
-	m_macadb->adb_data_callback().set(m_cuda, FUNC(cuda_device::set_adb_line));
+	m_adbbus->out_adb_callback().set(m_cuda, FUNC(cuda_device::set_adb_line));
+	m_adbbus->out_poweron_callback().set(m_cuda, FUNC(cuda_device::set_adb_power));
 
 	config.set_perfect_quantum(m_maincpu);
 

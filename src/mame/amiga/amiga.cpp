@@ -653,8 +653,8 @@ protected:
 	required_device<zorro3_bus_device> m_zorro;
 
 private:
-	uint16_t ide_r(offs_t offset, uint16_t mem_mask);
-	void ide_w(offs_t offset, uint16_t data, uint16_t mem_mask);
+	uint16_t ide_r(offs_t offset);
+	void ide_w(offs_t offset, uint16_t data);
 	void ide_interrupt_w(int state);
 
 	uint32_t motherboard_r(offs_t offset, uint32_t mem_mask);
@@ -1554,7 +1554,7 @@ bool a4000_state::int6_pending()
 	return m_cia_1_irq || m_zorro_int6;
 }
 
-uint16_t a4000_state::ide_r(offs_t offset, uint16_t mem_mask)
+uint16_t a4000_state::ide_r(offs_t offset)
 {
 	// ide interrupt register
 	if (offset == 0x1010)
@@ -1562,12 +1562,12 @@ uint16_t a4000_state::ide_r(offs_t offset, uint16_t mem_mask)
 
 	// this very likely doesn't respond to all the addresses, figure out which ones
 	if (BIT(offset, 12))
-		return m_ata->cs1_swap_r((offset >> 1) & 0x07, mem_mask);
+		return m_ata->cs1_swap_r((offset >> 1) & 0x07);
 	else
-		return m_ata->cs0_swap_r((offset >> 1) & 0x07, mem_mask);
+		return m_ata->cs0_swap_r((offset >> 1) & 0x07);
 }
 
-void a4000_state::ide_w(offs_t offset, uint16_t data, uint16_t mem_mask)
+void a4000_state::ide_w(offs_t offset, uint16_t data)
 {
 	// ide interrupt register, read only
 	if (offset == 0x1010)
@@ -1575,9 +1575,9 @@ void a4000_state::ide_w(offs_t offset, uint16_t data, uint16_t mem_mask)
 
 	// this very likely doesn't respond to all the addresses, figure out which ones
 	if (BIT(offset, 12))
-		m_ata->cs1_swap_w((offset >> 1) & 0x07, data, mem_mask);
+		m_ata->cs1_swap_w((offset >> 1) & 0x07, data);
 	else
-		m_ata->cs0_swap_w((offset >> 1) & 0x07, data, mem_mask);
+		m_ata->cs0_swap_w((offset >> 1) & 0x07, data);
 }
 
 void a4000_state::ide_interrupt_w(int state)
@@ -2252,6 +2252,10 @@ static void pcmcia_devices(device_slot_interface &device)
 // basic elements common to all amigas
 void amiga_state::amiga_base(machine_config &config)
 {
+	// NTSC E is the faster of the two, so its period is a fine enough quantum
+	// for both - configs switch between PAL and NTSC in either direction later
+	config.set_maximum_quantum(attotime::from_hz(amiga_state::CLK_E_NTSC));
+
 	// video
 	pal_video(config);
 
@@ -2267,7 +2271,7 @@ void amiga_state::amiga_base(machine_config &config)
 	m_cia_0->pb_rd_callback().set("cent_data_in", FUNC(input_buffer_device::read));
 	m_cia_0->pb_wr_callback().set("cent_data_out", FUNC(output_latch_device::write));
 	m_cia_0->pc_wr_callback().set(m_centronics, FUNC(centronics_device::write_strobe));
-	m_cia_0->sp_wr_callback().set("kbd", FUNC(amiga_keyboard_bus_device::kdat_in_w)).invert();
+	m_cia_0->sp_wr_callback().set("kbd", FUNC(amiga_keyboard_bus_device::kdat_in_w));
 
 	MOS8520(config, m_cia_1, amiga_state::CLK_E_PAL);
 	m_cia_1->irq_wr_callback().set(FUNC(amiga_state::cia_1_irq));
@@ -2300,8 +2304,8 @@ void amiga_state::amiga_base(machine_config &config)
 	// TODO: shouldn't have a clock
 	// (finite state machine, controlled by Agnus beams)
 	AGNUS_COPPER(config, m_copper, amiga_state::CLK_7M_PAL);
-	m_copper->set_host_cpu_tag(m_maincpu);
 	m_copper->mem_read_cb().set(FUNC(amiga_state::chip_ram_r));
+	m_copper->custom_write_cb().set(m_chipset, FUNC(address_map_bank_device::write16));
 	m_copper->set_ecs_mode(false);
 
 	// rs232
@@ -2313,7 +2317,7 @@ void amiga_state::amiga_base(machine_config &config)
 	rs232.cts_handler().set(FUNC(amiga_state::rs232_cts_w));
 
 	// centronics
-	CENTRONICS(config, m_centronics, centronics_devices, "printer");
+	CENTRONICS(config, m_centronics, centronics_devices, nullptr);
 	m_centronics->set_data_input_buffer("cent_data_in");
 	m_centronics->ack_handler().set(FUNC(amiga_state::centronics_ack_w));
 	m_centronics->busy_handler().set(FUNC(amiga_state::centronics_busy_w));
@@ -2332,6 +2336,7 @@ void amiga_state::amiga_base(machine_config &config)
 	SOFTWARE_LIST(config, "flop_list").set_original("amiga_flop");
 	SOFTWARE_LIST(config, "ocs_list").set_original("amigaocs_flop");
 	SOFTWARE_LIST(config, "demos_list").set_original("amiga_demos");
+	SOFTWARE_LIST(config, "flop_generic_list").set_compatible("generic_flop_35").set_filter("amiga");
 	SOFTWARE_LIST(config, "amigacd_list").set_original("amiga_cd");
 	// CD32 should support this off the bat, Aminet Photo CD packages available anyway.
 	SOFTWARE_LIST(config, "photocd_list").set_compatible("photo_cd");
@@ -2409,6 +2414,7 @@ void a2000_state::a2000(machine_config &config)
 	m_cpuslot->int2_cb().set(FUNC(a2000_state::cpuslot_int2_w));
 	m_cpuslot->int6_cb().set(FUNC(a2000_state::cpuslot_int6_w));
 	m_cpuslot->ipl7_cb().set([this](int state) { m_maincpu->set_input_line(7, state); });
+	m_cpuslot->fc_cb().set([this]() { return m_maincpu->get_fc(); });
 
 	// zorro2 slots
 	ZORRO2_BUS(config, m_zorro, amiga_state::CLK_7M_PAL);
@@ -2464,6 +2470,7 @@ void a500_state::a500(machine_config &config)
 	m_side->int2_cb().set(FUNC(a500_state::side_int2_w));
 	m_side->int6_cb().set(FUNC(a500_state::side_int6_w));
 	m_side->ipl7_cb().set([this](int state) { m_maincpu->set_input_line(7, state); });
+	m_side->fc_cb().set([this]() { return m_maincpu->get_fc(); });
 }
 
 void a500_state::a500n(machine_config &config)
@@ -2491,11 +2498,8 @@ void cdtv_state::cdtv(machine_config &config)
 
 	amiga_base(config);
 
-	// disable floppy as default
-	// TODO: breaks software loading
-#if 0
+	// no floppy drive by default
 	subdevice<floppy_connector>("fdc:0")->set_default_option(nullptr);
-#endif
 
 	// keyboard
 	INPUT_MERGER_ALL_HIGH(config, m_kbclock);
@@ -2541,6 +2545,8 @@ void cdtv_state::cdtv(machine_config &config)
 	m_lcdcpu->pn_out_cb().set(FUNC(cdtv_state::lcdcpu_portn_w));
 	m_lcdcpu->po_out_cb().set(FUNC(cdtv_state::lcdcpu_porto_w));
 	m_lcdcpu->pp_out_cb().set(FUNC(cdtv_state::lcdcpu_portp_w));
+	m_lcdcpu->so_out_cb().set(m_cdrom, FUNC(cr511b_device::sdata_w));
+	m_lcdcpu->sck_out_cb().set(m_cdrom, FUNC(cr511b_device::sck_w));
 
 	PWM_DISPLAY(config, m_vfd_display);
 	m_vfd_display->set_size(8, 8);
@@ -2584,6 +2590,7 @@ void cdtv_state::cdtv(machine_config &config)
 	m_cdrom->drq_cb().set(m_tpi, FUNC(tpi6525_device::pc4_w));
 	m_cdrom->drq_cb().append(FUNC(cdtv_state::drq_w));
 	m_cdrom->subcode_data_cb().set(m_tpi, FUNC(tpi6525_device::pa_w));
+	m_cdrom->sdata_cb().set(m_lcdcpu, FUNC(lc6554_cpu_device::si_w));
 
 	SOFTWARE_LIST(config, "cd_list").set_original("cdtv");
 
@@ -2690,6 +2697,7 @@ void a500p_state::a500p(machine_config &config)
 	m_side->int2_cb().set(FUNC(a500p_state::side_int2_w));
 	m_side->int6_cb().set(FUNC(a500p_state::side_int6_w));
 	m_side->ipl7_cb().set([this](int state) { m_maincpu->set_input_line(7, state); });
+	m_side->fc_cb().set([this]() { return m_maincpu->get_fc(); });
 
 	// software
 	SOFTWARE_LIST(config, "ecs_list").set_original("amigaecs_flop");

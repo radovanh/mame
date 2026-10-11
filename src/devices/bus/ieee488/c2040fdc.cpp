@@ -6,15 +6,6 @@
 
 **********************************************************************/
 
-/*
-
-    TODO:
-
-    - write protect
-    - separate read/write methods
-
-*/
-
 #include "emu.h"
 #include "c2040fdc.h"
 
@@ -117,6 +108,49 @@ void c2040_fdc_device::device_start()
 	save_item(NAME(m_drv_sel));
 	save_item(NAME(m_mode_sel));
 	save_item(NAME(m_rw_sel));
+	save_item(NAME(m_pi));
+
+	save_item(NAME(cur_live.tm));
+	save_item(NAME(cur_live.state));
+	save_item(NAME(cur_live.next_state));
+	save_item(NAME(cur_live.sync));
+	save_item(NAME(cur_live.ready));
+	save_item(NAME(cur_live.error));
+	save_item(NAME(cur_live.ds));
+	save_item(NAME(cur_live.drv_sel));
+	save_item(NAME(cur_live.mode_sel));
+	save_item(NAME(cur_live.rw_sel));
+	save_item(NAME(cur_live.odd_hd));
+	save_item(NAME(cur_live.edge));
+	save_item(NAME(cur_live.shift_reg));
+	save_item(NAME(cur_live.cycle_counter));
+	save_item(NAME(cur_live.cell_counter));
+	save_item(NAME(cur_live.bit_counter));
+	save_item(NAME(cur_live.e));
+	save_item(NAME(cur_live.i));
+	save_item(NAME(cur_live.pi));
+	save_item(NAME(cur_live.shift_reg_write));
+
+	save_item(NAME(checkpoint_live.tm));
+	save_item(NAME(checkpoint_live.state));
+	save_item(NAME(checkpoint_live.next_state));
+	save_item(NAME(checkpoint_live.sync));
+	save_item(NAME(checkpoint_live.ready));
+	save_item(NAME(checkpoint_live.error));
+	save_item(NAME(checkpoint_live.ds));
+	save_item(NAME(checkpoint_live.drv_sel));
+	save_item(NAME(checkpoint_live.mode_sel));
+	save_item(NAME(checkpoint_live.rw_sel));
+	save_item(NAME(checkpoint_live.odd_hd));
+	save_item(NAME(checkpoint_live.edge));
+	save_item(NAME(checkpoint_live.shift_reg));
+	save_item(NAME(checkpoint_live.cycle_counter));
+	save_item(NAME(checkpoint_live.cell_counter));
+	save_item(NAME(checkpoint_live.bit_counter));
+	save_item(NAME(checkpoint_live.e));
+	save_item(NAME(checkpoint_live.i));
+	save_item(NAME(checkpoint_live.pi));
+	save_item(NAME(checkpoint_live.shift_reg_write));
 }
 
 
@@ -180,14 +214,18 @@ void c2040_fdc_device::live_start()
 
 void c2040_fdc_device::checkpoint()
 {
-	get_next_edge(machine().time());
+	if (cur_live.rw_sel) {
+		get_next_edge(machine().time());
+	}
 	checkpoint_live = cur_live;
 }
 
 void c2040_fdc_device::rollback()
 {
 	cur_live = checkpoint_live;
-	get_next_edge(cur_live.tm);
+	if (cur_live.rw_sel) {
+		get_next_edge(cur_live.tm);
+	}
 }
 
 void c2040_fdc_device::start_writing(const attotime &tm)
@@ -208,7 +246,7 @@ bool c2040_fdc_device::write_next_bit(bool bit, const attotime &limit)
 	if(etime > limit)
 		return true;
 
-	if(bit && get_floppy())
+	if(bit && get_floppy() && !get_floppy()->wpt_r())
 		get_floppy()->write_flux_change(cur_live.tm - m_period);
 
 	if (LOG) logerror("%s write bit %u (%u)\n", cur_live.tm.as_string(), cur_live.bit_counter, bit);
@@ -285,6 +323,9 @@ void c2040_fdc_device::live_run(const attotime &limit)
 			if (cur_live.tm > limit)
 				return;
 
+			if ((cur_live.tm + m_period) > limit)
+				return;
+
 			int bit = get_next_bit(cur_live.tm, limit);
 			if(bit < 0)
 				return;
@@ -315,7 +356,7 @@ void c2040_fdc_device::live_run(const attotime &limit)
 					!(BIT(cur_live.cell_counter, 3) || BIT(cur_live.cell_counter, 2)), cur_live.shift_reg, cur_live.rw_sel, cur_live.mode_sel);
 
 				// write bit
-				if (!cur_live.rw_sel) { // TODO WPS
+				if (!cur_live.rw_sel && !get_floppy()->wpt_r()) {
 					write_next_bit(BIT(cur_live.shift_reg_write, 9), limit);
 				}
 
@@ -377,8 +418,6 @@ void c2040_fdc_device::live_run(const attotime &limit)
 			}
 
 			if (syncpoint) {
-				commit(cur_live.tm);
-
 				cur_live.tm += m_period;
 				live_delay(RUNNING_SYNCPOINT);
 				return;
@@ -410,6 +449,9 @@ void c2040_fdc_device::get_next_edge(const attotime &when)
 
 int c2040_fdc_device::get_next_bit(attotime &tm, const attotime &limit)
 {
+	if (!cur_live.rw_sel)
+		return 0;
+
 	attotime next = tm + m_period;
 
 	int bit = (cur_live.edge.is_never() || cur_live.edge >= next) ? 0 : 1;
@@ -418,7 +460,7 @@ int c2040_fdc_device::get_next_bit(attotime &tm, const attotime &limit)
 		get_next_edge(next);
 	}
 
-	return bit && cur_live.rw_sel;
+	return bit;
 }
 
 uint8_t c2040_fdc_device::read()

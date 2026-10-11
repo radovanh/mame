@@ -741,16 +741,18 @@ TODO:
 
 #include "cclimber_a.h"
 
+#include "nl_konami.h"
+
 #include "cpu/m6502/m6502.h"
 #include "cpu/s2650/s2650.h"
 #include "cpu/z80/z80.h"
 #include "machine/nvram.h"
 #include "machine/watchdog.h"
-#include "screen.h"
+
 #include "sound.h"
 #include "speaker.h"
 
-#include "nl_konami.h"
+#include <algorithm>
 
 
 /*************************************
@@ -1563,13 +1565,13 @@ void galaxian_state::checkman_sound_command_w(uint8_t data)
 }
 
 
-TIMER_DEVICE_CALLBACK_MEMBER(galaxian_state::checkmaj_irq0_gen)
+TIMER_DEVICE_CALLBACK_MEMBER(galaxian_state::checkmanj_irq0_gen)
 {
 	m_audiocpu->set_input_line(0, HOLD_LINE);
 }
 
 
-uint8_t galaxian_state::checkmaj_protection_r()
+uint8_t galaxian_state::checkmanj_protection_r()
 {
 	switch (m_maincpu->pc())
 	{
@@ -1892,6 +1894,12 @@ void galaxian_state::thepitm_map(address_map &map)
 	map(0xb000, 0xb000).mirror(0x7f8).nopw(); // interrupt enable moved
 	map(0xb001, 0xb001).mirror(0x7f8).w(FUNC(galaxian_state::irq_enable_w));
 	map(0xb004, 0xb004).mirror(0x7f8).nopw(); // disable the stars
+}
+
+void galaxian_state::amidarc_map(address_map &map)
+{
+	thepitm_map(map);
+	map(0x8400, 0x87ff).ram(); // needs 2k of RAM
 }
 
 void pisces_state::porter_map(address_map &map)
@@ -2952,7 +2960,7 @@ void galaxian_state::checkman_sound_portmap(address_map &map)
 
 // Checkman alternate with 1 x AY-8910A
 
-void galaxian_state::checkmaj_sound_map(address_map &map)
+void galaxian_state::checkmanj_sound_map(address_map &map)
 {
 	map.unmap_value_high();
 	map(0x0000, 0x0fff).rom();
@@ -5026,7 +5034,7 @@ static INPUT_PORTS_START( checkman )
 INPUT_PORTS_END
 
 
-static INPUT_PORTS_START( checkmaj )
+static INPUT_PORTS_START( checkmanj )
 	PORT_INCLUDE(checkman)
 
 	PORT_MODIFY("IN0")
@@ -5497,6 +5505,19 @@ static INPUT_PORTS_START( amidaru )
 INPUT_PORTS_END
 
 
+static INPUT_PORTS_START( amidarb )
+	PORT_INCLUDE(amidaru)
+
+	// the bootleg gives one life less than the original for each setting
+	PORT_MODIFY("IN1")
+	PORT_DIPNAME( 0x03, 0x03, DEF_STR( Lives ) )
+	PORT_DIPSETTING(    0x03, "2" )
+	PORT_DIPSETTING(    0x02, "3" )
+	PORT_DIPSETTING(    0x01, "4" )
+	PORT_DIPSETTING(    0x00, "255 (Cheat)" )
+INPUT_PORTS_END
+
+
 static INPUT_PORTS_START( amidaro )
 	PORT_INCLUDE(amidar)
 
@@ -5534,6 +5555,45 @@ static INPUT_PORTS_START( amidars )
 	PORT_DIPNAME( 0x04, 0x00, DEF_STR( Bonus_Life ) )
 	PORT_DIPSETTING(    0x00, "30000 70000" )
 	PORT_DIPSETTING(    0x04, "50000 80000" )
+INPUT_PORTS_END
+
+
+// the code at 0x4000 rearranges these into the original Konami layout
+static INPUT_PORTS_START( amidarc )
+	PORT_START("IN0")
+	PORT_BIT( 0x01, IP_ACTIVE_HIGH, IPT_COIN1 )
+	PORT_BIT( 0x02, IP_ACTIVE_HIGH, IPT_COIN2 )
+	PORT_BIT( 0x04, IP_ACTIVE_HIGH, IPT_JOYSTICK_LEFT ) PORT_4WAY
+	PORT_BIT( 0x08, IP_ACTIVE_HIGH, IPT_JOYSTICK_RIGHT ) PORT_4WAY
+	PORT_BIT( 0x10, IP_ACTIVE_HIGH, IPT_JOYSTICK_UP ) PORT_4WAY
+	PORT_BIT( 0x20, IP_ACTIVE_HIGH, IPT_UNUSED )
+	PORT_BIT( 0x40, IP_ACTIVE_HIGH, IPT_BUTTON1 ) PORT_COCKTAIL
+	PORT_BIT( 0x80, IP_ACTIVE_HIGH, IPT_JOYSTICK_DOWN ) PORT_4WAY
+
+	PORT_START("IN1")
+	PORT_BIT( 0x01, IP_ACTIVE_HIGH, IPT_START1 ) // also acts as the jump button for player 1
+	PORT_BIT( 0x02, IP_ACTIVE_HIGH, IPT_START2 )
+	PORT_BIT( 0x04, IP_ACTIVE_HIGH, IPT_JOYSTICK_LEFT ) PORT_4WAY PORT_COCKTAIL
+	PORT_BIT( 0x08, IP_ACTIVE_HIGH, IPT_JOYSTICK_RIGHT ) PORT_4WAY PORT_COCKTAIL
+	PORT_BIT( 0x10, IP_ACTIVE_HIGH, IPT_JOYSTICK_UP ) PORT_4WAY PORT_COCKTAIL
+	PORT_BIT( 0x20, IP_ACTIVE_HIGH, IPT_JOYSTICK_DOWN ) PORT_4WAY PORT_COCKTAIL
+	PORT_DIPNAME( 0xc0, 0x00, DEF_STR( Lives ) )
+	PORT_DIPSETTING(    0x00, "3" )
+	PORT_DIPSETTING(    0x80, "4" )
+	PORT_DIPSETTING(    0x40, "5" )
+	PORT_DIPSETTING(    0xc0, "255 (Cheat)" )
+
+	PORT_START("IN2")
+	PORT_DIPNAME( 0x01, 0x01, DEF_STR( Cabinet ) )
+	PORT_DIPSETTING(    0x01, DEF_STR( Upright ) )
+	PORT_DIPSETTING(    0x00, DEF_STR( Cocktail ) )
+	PORT_DIPNAME( 0x02, 0x02, DEF_STR( Bonus_Life ) )
+	PORT_DIPSETTING(    0x02, "30000 70000" )
+	PORT_DIPSETTING(    0x00, "50000 80000" )
+	PORT_DIPNAME( 0x04, 0x00, DEF_STR( Coinage ) ) // also enables demo sounds
+	PORT_DIPSETTING(    0x00, "A 1/1 B 1/6" )
+	PORT_DIPSETTING(    0x04, "A 2/1 B 1/3" )
+	PORT_BIT( 0xf8, IP_ACTIVE_HIGH, IPT_UNUSED )
 INPUT_PORTS_END
 
 
@@ -7812,6 +7872,12 @@ void galaxian_state::thepitm(machine_config &config)
 	m_maincpu->set_addrmap(AS_PROGRAM, &galaxian_state::thepitm_map);
 }
 
+void galaxian_state::amidarc(machine_config &config)
+{
+	thepitm(config);
+	m_maincpu->set_addrmap(AS_PROGRAM, &galaxian_state::amidarc_map);
+}
+
 void pisces_state::porter(machine_config &config)
 {
 	mooncrst(config);
@@ -7996,7 +8062,7 @@ void galaxian_state::checkman(machine_config &config)
 }
 
 
-void galaxian_state::checkmaj(machine_config &config)
+void galaxian_state::checkmanj(machine_config &config)
 {
 	galaxian_base(config);
 
@@ -8004,16 +8070,16 @@ void galaxian_state::checkmaj(machine_config &config)
 	m_maincpu->set_addrmap(AS_PROGRAM, &galaxian_state::galaxian_map_base); // no discrete sound
 
 	Z80(config, m_audiocpu, 1620000);
-	m_audiocpu->set_addrmap(AS_PROGRAM, &galaxian_state::checkmaj_sound_map);
+	m_audiocpu->set_addrmap(AS_PROGRAM, &galaxian_state::checkmanj_sound_map);
 
-	TIMER(config, "irq0").configure_scanline(FUNC(galaxian_state::checkmaj_irq0_gen), "screen", 0, 8);
+	TIMER(config, "irq0").configure_scanline(FUNC(galaxian_state::checkmanj_irq0_gen), "screen", 0, 8);
 
 	GENERIC_LATCH_8(config, m_soundlatch);
 
 	// sound hardware
 	AY8910(config, m_ay8910[0], 1620000);
 	m_ay8910[0]->port_a_read_callback().set(m_soundlatch, FUNC(generic_latch_8_device::read));
-	m_ay8910[0]->add_route(ALL_OUTPUTS, "speaker", 2);
+	m_ay8910[0]->add_route(ALL_OUTPUTS, "speaker", 0.5);
 }
 
 
@@ -8929,6 +8995,14 @@ void pisces_state::init_pisces()
 	m_extend_sprite_info_ptr = extend_sprite_info_delegate(&pisces_state::pisces_extend_sprite_info, this);
 }
 
+void pisces_state::init_porterb()
+{
+	init_pisces();
+
+	uint8_t *rom = memregion("maincpu")->base();
+	for (int i = 0; i < 4; i++)
+		std::ranges::reverse(rom + 0x4000 + (i << 10), rom + 0x4000 + ((i + 1) << 10));
+}
 
 void galaxian_state::init_batman2()
 {
@@ -9232,7 +9306,7 @@ void galaxian_state::init_checkman()
 }
 
 
-void galaxian_state::init_checkmaj()
+void galaxian_state::init_checkmanj()
 {
 	address_space &space = m_maincpu->space(AS_PROGRAM);
 
@@ -9243,7 +9317,7 @@ void galaxian_state::init_checkmaj()
 	space.install_write_handler(0x7800, 0x7800, 0, 0x7ff, 0, write8smo_delegate(*this, FUNC(galaxian_state::checkman_sound_command_w)));
 
 	// for the title screen
-	space.install_read_handler(0x3800, 0x3800, read8smo_delegate(*this, FUNC(galaxian_state::checkmaj_protection_r)));
+	space.install_read_handler(0x3800, 0x3800, read8smo_delegate(*this, FUNC(galaxian_state::checkmanj_protection_r)));
 }
 
 
@@ -13756,6 +13830,29 @@ ROM_START( portera )
 	ROM_LOAD( "port_man_82s123.6l", 0x0000, 0x0020, CRC(6a0c7d87) SHA1(140335d85c67c75b65689d4e76d29863c209cf32) )
 ROM_END
 
+ROM_START( porterb )
+	ROM_REGION( 0x5000, "maincpu", 0 )
+	ROM_LOAD( "pm-1_2716.bin",       0x0000, 0x0800, CRC(09b80d10) SHA1(d2de4023fd71434fa9f53b5a900fc962729882e0) )
+	ROM_LOAD( "pm-2_2716.bin",       0x0800, 0x0800, CRC(a5463473) SHA1(5d856fc011bd8465b4d2c93e108f30123f406c7d) )
+	ROM_LOAD( "pm-3_2532.bin",       0x1000, 0x1000, CRC(322c5b18) SHA1(02a700a52d5a13a225ce0a5f7d667f56ae0ffd5a) )
+	ROM_LOAD( "pm-4_2532.bin",       0x2000, 0x1000, CRC(3df03cd5) SHA1(f7d9a41adc20ebcce3e88061035e35711def0cdc) )
+	ROM_LOAD( "pm-5-2532.bin",       0x3000, 0x1000, CRC(37408062) SHA1(96961353d6c32303280004e36a81c83869de75e5) )
+	ROM_LOAD( "pm-6_2532.bin",       0x4000, 0x1000, CRC(1d6e6442) SHA1(6fce4fd548d54ecc477992ea0deaf4505b036a73) )
+
+	ROM_REGION( 0x2000, "gfx1", 0 )
+	ROM_LOAD( "2716.1h_bottom.bin",  0x0000, 0x0800, BAD_DUMP CRC(147dc4b6) SHA1(8a3ffefec829cb2120c1a863937836c191fb12b0) ) // bitrotten
+	ROM_LOAD( "2716.1h_upper.bin",   0x0800, 0x0800, CRC(a85b080b) SHA1(bf208607613c5f6b039950df11d19e1149671ccc) )
+	ROM_LOAD( "2716.1k_bottom.bin",  0x1000, 0x0800, BAD_DUMP CRC(cd4fcabc) SHA1(d0d51d701a12231c3dafcb91b3df21e05915138e) ) // bitrotten
+	ROM_LOAD( "2716.1k_upper.bin",   0x1800, 0x0800, CRC(44e5cc3c) SHA1(e372f49e1785914512c58df216723c4782eb8918) )
+
+	ROM_REGION( 0x0020, "proms", 0 )
+	ROM_LOAD( "82s123.6l",           0x0000, 0x0020, CRC(4e3caeab) SHA1(a25083c3e36d28afdefe4af6e6d4f3155e303625) )
+
+	// Additional PROM on program ROMs PCB
+	ROM_REGION( 0x0020, "proms2", 0 )
+	ROM_LOAD( "topboard_82s123.bin", 0x0000, 0x0020, CRC(97c473cc) SHA1(1bbb7f17b8d6a3a621e8c22d473eb26d4c1a750b) )
+ROM_END
+
 
 ROM_START( skybase )
 	ROM_REGION( 0x10000, "maincpu", 0 )
@@ -14776,7 +14873,7 @@ ROM_START( amidarc ) // on Cirsa 804018 PCB
 
 	ROM_REGION( 0x1000, "gfx1", 0 )
 	ROM_LOAD( "amigal-i-2716.bin",  0x000, 0x800, CRC(2082ad0a) SHA1(c6014d9575e92adf09b0961c2158a779ebe940c4) )
-	ROM_LOAD( "amigal-h-2732.bin",  0x800, 0x800, CRC(8f774d5a) SHA1(215cf47e073e9e2e042d7564d426675e1cd4f884) ) // first half contains corrupt GFX. Bad dump or does the PCB just use the second half?
+	ROM_LOAD( "amigal-h-2732.bin",  0x800, 0x800, CRC(8f774d5a) SHA1(215cf47e073e9e2e042d7564d426675e1cd4f884) ) // 1st half is the same data with extra bits cleared (badly erased reused EPROM), unused: 2716 socket ties pin 21 (A11) high
 	ROM_CONTINUE(                   0x800, 0x800 ) // amigal-h-2732.bin [2/2] == 6.5h of amidarb
 
 	ROM_REGION( 0x20, "proms", 0 )
@@ -17097,10 +17194,11 @@ GAME( 1982, bagmanm3,    bagman,   bagmanmc,   bagmanmc,   bagmanmc_state, init_
 
 
 // Other games on basic mooncrst hardware
-GAME( 1982, porter,      dockman,  porter,     porter,     pisces_state,   init_pisces,     ROT90,  "bootleg",                  "Port Man (bootleg on Moon Cresta hardware)",                      MACHINE_IMPERFECT_COLORS | MACHINE_NO_COCKTAIL )
-GAME( 1982, portera,     dockman,  porter,     portera,    pisces_state,   init_pisces,     ROT90,  "bootleg",                  "El Estivador (Spanish bootleg of Port Man on Galaxian hardware)", MACHINE_IMPERFECT_COLORS | MACHINE_NO_COCKTAIL ) // May be Portuguese, not Spanish
-GAME( 1982, skybase,     0,        skybase,    skybase,    pisces_state,   init_pisces,     ROT90,  "Omori Electric Co., Ltd.", "Sky Base",                                                        MACHINE_SUPPORTS_SAVE )
-GAME( 198?, kong,        0,        kong,       kong,       galaxian_state, init_kong,       ROT90,  "Taito do Brasil",          "Kong (Donkey Kong conversion on Galaxian hardware)",              MACHINE_SUPPORTS_SAVE | MACHINE_WRONG_COLORS ) // rewrite of Donkey Kong (!) not a clone
+GAME( 1982, porter,      dockman,  porter,     porter,     pisces_state,   init_pisces,     ROT90,  "bootleg",                  "Port Man (bootleg on Moon Cresta hardware)",                             MACHINE_IMPERFECT_COLORS | MACHINE_NO_COCKTAIL )
+GAME( 1982, portera,     dockman,  porter,     portera,    pisces_state,   init_pisces,     ROT90,  "bootleg",                  "El Estivador (Spanish bootleg of Port Man on Galaxian hardware, set 1)", MACHINE_IMPERFECT_COLORS | MACHINE_NO_COCKTAIL ) // May be Portuguese, not Spanish
+GAME( 1982, porterb,     dockman,  porter,     portera,    pisces_state,   init_porterb,    ROT90,  "bootleg",                  "El Estivador (Spanish bootleg of Port Man on Galaxian hardware, set 2)", MACHINE_NOT_WORKING | MACHINE_IMPERFECT_GRAPHICS | MACHINE_IMPERFECT_COLORS | MACHINE_NO_COCKTAIL ) // Bad Gfx ROMs. May be Portuguese, not Spanish
+GAME( 1982, skybase,     0,        skybase,    skybase,    pisces_state,   init_pisces,     ROT90,  "Omori Electric Co., Ltd.", "Sky Base",                                                               MACHINE_SUPPORTS_SAVE )
+GAME( 198?, kong,        0,        kong,       kong,       galaxian_state, init_kong,       ROT90,  "Taito do Brasil",          "Kong (Donkey Kong conversion on Galaxian hardware)",                     MACHINE_SUPPORTS_SAVE | MACHINE_WRONG_COLORS ) // rewrite of Donkey Kong (!) not a clone
 
 // Larger romspace, 2*AY8910, based on Super Star Crest board?
 // There may be an alternate version called "Fantasy" according to flyers; is it the same?
@@ -17119,8 +17217,8 @@ GAME( 1983, levers,      0,        jumpbug,    levers,     galaxian_state, init_
 
 // 2nd CPU driving AY8910 for sound
 GAME( 1982, checkman,    0,        checkman,   checkman,   galaxian_state, init_checkman,   ROT90,  "Zilec-Zenitone",                                     "Check Man",         MACHINE_SUPPORTS_SAVE )
-GAME( 1982, checkmanj,   checkman, checkmaj,   checkmaj,   galaxian_state, init_checkmaj,   ROT90,  "Zilec-Zenitone (Jaleco license)",                    "Check Man (Japan)", MACHINE_SUPPORTS_SAVE )
-GAME( 1983, dingo,       0,        checkmaj,   dingo,      galaxian_state, init_dingo,      ROT90,  "Ashby Computers and Graphics Ltd. (Jaleco license)", "Dingo",             MACHINE_SUPPORTS_SAVE )
+GAME( 1982, checkmanj,   checkman, checkmanj,  checkmanj,  galaxian_state, init_checkmanj,  ROT90,  "Zilec-Zenitone (Jaleco license)",                    "Check Man (Japan)", MACHINE_SUPPORTS_SAVE )
+GAME( 1983, dingo,       0,        checkmanj,  dingo,      galaxian_state, init_dingo,      ROT90,  "Ashby Computers and Graphics Ltd. (Jaleco license)", "Dingo",             MACHINE_SUPPORTS_SAVE )
 GAME( 1983, dingoe,      dingo,    checkman,   dingo,      galaxian_state, init_dingoe,     ROT90,  "Ashby Computers and Graphics Ltd.",                  "Dingo (encrypted)", MACHINE_NOT_WORKING | MACHINE_SUPPORTS_SAVE )
 
 // Crazy Climber sound plus AY8910 instead of galaxian sound, plus INT instead of NMI
@@ -17174,9 +17272,9 @@ GAME( 1982, amidar,      0,        turtles,    amidaru,    galaxian_state, init_
 GAME( 1981, amidar1,     amidar,   turtles,    amidar,     galaxian_state, init_turtles,    ROT90,  "Konami",                             "Amidar (older)",                                                         MACHINE_SUPPORTS_SAVE )
 GAME( 1982, amidaru,     amidar,   turtles,    amidaru,    galaxian_state, init_turtles,    ROT90,  "Konami (Stern Electronics license)", "Amidar (Stern Electronics)",                                             MACHINE_SUPPORTS_SAVE )
 GAME( 1982, amidaro,     amidar,   turtles,    amidaro,    galaxian_state, init_turtles,    ROT90,  "Konami (Olympia license)",           "Amidar (Olympia)",                                                       MACHINE_SUPPORTS_SAVE )
-GAME( 1982, amidarb,     amidar,   turtles,    amidaru,    galaxian_state, init_turtles,    ROT90,  "bootleg",                            "Amidar (bootleg, set 1)",                                                MACHINE_SUPPORTS_SAVE ) // Similar to Amigo bootleg
+GAME( 1982, amidarb,     amidar,   turtles,    amidarb,    galaxian_state, init_turtles,    ROT90,  "bootleg",                            "Amidar (bootleg, set 1)",                                                MACHINE_SUPPORTS_SAVE ) // Similar to Amigo bootleg
 GAME( 1982, amidarb2,    amidar,   mandingarf, olmandingo, galaxian_state, init_galaxian,   ROT90,  "bootleg",                            "Amidar (bootleg, set 2)",                                                MACHINE_SUPPORTS_SAVE )
-GAME( 1982, amidarc,     amidar,   thepitm,    mandingarf, galaxian_state, init_turtles,    ROT90,  "bootleg (Cirsa)",                    "Amidar (Cirsa bootleg)",                                                 MACHINE_IMPERFECT_SOUND | MACHINE_NOT_WORKING | MACHINE_SUPPORTS_SAVE ) // resets when starting a game
+GAME( 1982, amidarc,     amidar,   amidarc,    amidarc,    galaxian_state, init_turtles,    ROT90,  "bootleg (Cirsa)",                    "Amidar (Cirsa bootleg)",                                                 MACHINE_IMPERFECT_SOUND | MACHINE_SUPPORTS_SAVE )
 GAME( 1982, amigo,       amidar,   turtles,    amidaru,    galaxian_state, init_turtles,    ROT90,  "bootleg",                            "Amigo (bootleg of Amidar, set 1)",                                       MACHINE_SUPPORTS_SAVE )
 GAME( 1982, amigo2,      amidar,   amigo2,     amidaru,    galaxian_state, init_turtles,    ROT90,  "bootleg",                            "Amigo (bootleg of Amidar, set 2)",                                       MACHINE_SUPPORTS_SAVE | MACHINE_IMPERFECT_SOUND ) // sound timer might be different?
 GAME( 1982, amidars,     amidar,   scramble,   amidars,    galaxian_state, init_scramble,   ROT90,  "Konami",                             "Amidar (Scramble hardware)",                                             MACHINE_SUPPORTS_SAVE )

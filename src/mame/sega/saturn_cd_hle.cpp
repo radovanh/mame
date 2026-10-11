@@ -98,7 +98,7 @@ DASM notes:
 #define CD_STAT_FATAL    0x0a00     // fatal error (hard reset required)
 #define CD_STAT_PERI     0x2000     // periodic response if set, else command response
 #define CD_STAT_TRANS    0x4000     // data transfer request if set
-#define CD_STAT_WAIT     0x8000     // waiting for command if set, else executed immediately
+#define CD_STAT_WAIT     0x8000     // waiting for command completion if set, else executed immediately
 #define CD_STAT_REJECT   0xff00     // ultra-fatal error.
 
 DEFINE_DEVICE_TYPE(SATURN_CD_HLE, saturn_cd_hle_device, "saturn_cd_hle", "Sega Saturn/ST-V CD Block HLE")
@@ -146,11 +146,6 @@ void saturn_cd_hle_device::device_start()
 	save_item(NAME(cr2));
 	save_item(NAME(cr3));
 	save_item(NAME(cr4));
-	save_item(NAME(prev_cr1));
-	save_item(NAME(prev_cr2));
-	save_item(NAME(prev_cr3));
-	save_item(NAME(prev_cr4));
-	save_item(NAME(status_type));
 	save_item(NAME(hirqmask));
 	save_item(NAME(hirqreg));
 	save_item(NAME(cd_stat));
@@ -333,6 +328,8 @@ inline u32 saturn_cd_hle_device::dataxfer_long_r()
 				xferoffs += 4;
 
 				// did we run out of sector?
+				// TODO: why bare xfersect without xfersectpos adder?
+				// - groovef/vfkidsk would use that, no apparent change in their own issues
 				if (xferoffs >= transpart->blocks[xfersect]->size)
 				{
 					LOG("Finished xfer of block %d of %d\n", xfersect+1, xfersectnum);
@@ -687,16 +684,7 @@ void saturn_cd_hle_device::cmd_get_status()
 {
 	//LOGCMD("%s: Get Status\n", machine().describe_context();
 	hirqreg |= CMOK;
-	if(status_type == 0)
-		cr_standard_return(cd_stat);
-	else
-	{
-		cr1 = (cd_stat) | (prev_cr1 & 0xff);
-		cr2 = prev_cr2;
-		cr3 = prev_cr3;
-		cr4 = prev_cr4;
-		status_type = 0; /* Road Blaster and friends needs this otherwise they won't boot. */
-	}
+	cr_standard_return(cd_stat);
 	//LOG("   = %04x %04x %04x %04x %04x\n", hirqreg, cr1, cr2, cr3, cr4);
 }
 
@@ -708,7 +696,6 @@ void saturn_cd_hle_device::cmd_get_hw_info()
 	cr2 = 0x0201;
 	cr3 = 0x0000;
 	cr4 = 0x0400;
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_get_toc()
@@ -724,7 +711,6 @@ void saturn_cd_hle_device::cmd_get_toc()
 	cr4 = 0;
 	xferdnum = 0;
 	hirqreg |= (CMOK|DRDY);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_get_session_info()
@@ -766,7 +752,6 @@ void saturn_cd_hle_device::cmd_get_session_info()
 	}
 
 	hirqreg |= (CMOK);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_init_cdsystem()
@@ -821,7 +806,6 @@ void saturn_cd_hle_device::cmd_init_cdsystem()
 	// TODO: ESEL happens at the end of the actual reset phase
 	hirqreg |= (CMOK | ESEL | EFLS | ECPY | EHST);
 	cr_standard_return(cd_stat);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_end_data_transfer()
@@ -898,7 +882,6 @@ void saturn_cd_hle_device::cmd_end_data_transfer()
 	hirqreg |= CMOK;
 
 	LOGXFER("\t%04x %04x %04x %04x %04x\n", hirqreg, cr1, cr2, cr3, cr4);
-	status_type = 1;
 }
 
 void saturn_cd_hle_device::cmd_play_disc()
@@ -907,7 +890,7 @@ void saturn_cd_hle_device::cmd_play_disc()
 	uint32_t start_pos, end_pos;
 	uint8_t play_mode;
 
-	LOGCMD("%s: Play Disc\n",   machine().describe_context());
+	LOGCMD("%s: Play Disc\n", machine().describe_context());
 
 	play_mode = (cr3 >> 8) & 0x7f;
 
@@ -1033,7 +1016,6 @@ void saturn_cd_hle_device::cmd_play_disc()
 		cdda_maxrepeat = 0;
 
 	cdda_repeat_count = 0;
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_seek_disc()
@@ -1046,7 +1028,7 @@ void saturn_cd_hle_device::cmd_seek_disc()
 	cdda_repeat_count = 0;
 	playtype = 0;
 
-	LOGCMD("%s: Disc seek\n",   machine().describe_context());
+	LOGCMD("%s: Disc seek\n", machine().describe_context());
 	LOGCMD("\t%04x %04x %04x %04x\n",cr1, cr2, cr3, cr4);
 	if (cr1 & 0x80)
 	{
@@ -1111,15 +1093,18 @@ void saturn_cd_hle_device::cmd_seek_disc()
 
 	hirqreg |= CMOK;
 	cr_standard_return(cd_stat);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_ffwd_rew_disc()
 {
 	// FFWD / REW
 	// cr1 bit 0 determines if this is a Fast Forward (0) or a Rewind (1) command
+	// Speed is roughly 3 seconds per 1 minute of pickup going in either direction.
+
 	// TODO: unemulated, can be triggered thru Multiplayer by holding on relevant keys
-	// ...
+	// probably unused beyond that.
+	hirqreg |= CMOK;
+	cr_standard_return(cd_stat);
 }
 
 void saturn_cd_hle_device::cmd_get_subcode_q_rw_channel()
@@ -1196,7 +1181,6 @@ void saturn_cd_hle_device::cmd_get_subcode_q_rw_channel()
 			break;
 	}
 	hirqreg |= CMOK|DRDY;
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_set_cddevice_connection()
@@ -1206,7 +1190,7 @@ void saturn_cd_hle_device::cmd_set_cddevice_connection()
 	// get operation
 	param = cr3 >> 8;
 
-	LOGCMD("%s: Set CD Device Connection filter # %x\n",   machine().describe_context(), param);
+	LOGCMD("%s: Set CD Device Connection filter # %x\n", machine().describe_context(), param);
 
 	cddevicenum = param;
 
@@ -1230,12 +1214,11 @@ void saturn_cd_hle_device::cmd_set_cddevice_connection()
 
 	hirqreg |= (CMOK|ESEL);
 	cr_standard_return(cd_stat);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_get_cddevice_connection()
 {
-	LOGCMD("%s: Get CD Device Connection filter\n",   machine().describe_context());
+	LOGCMD("%s: Get CD Device Connection filter\n", machine().describe_context());
 	cr1 = cd_stat | 0;
 	cr2 = 0;
 	cr3 = cddevicenum << 8;
@@ -1252,7 +1235,6 @@ void saturn_cd_hle_device::cmd_last_buffer_destination()
 	cr3 = lastbuf << 8;
 	cr4 = 0;
 	hirqreg |= (CMOK);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_set_filter_range()
@@ -1261,7 +1243,7 @@ void saturn_cd_hle_device::cmd_set_filter_range()
 	// cr3 hi = filter num.
 	uint8_t fnum = (cr3 >> 8) & 0xff;
 
-	LOGCMD("%s: Set Filter Range\n",   machine().describe_context());
+	LOGCMD("%s: Set Filter Range\n", machine().describe_context());
 
 	filters[fnum].fad = ((cr1 & 0xff)<<16) | cr2;
 	filters[fnum].range = ((cr3 & 0xff)<<16) | cr4;
@@ -1270,7 +1252,6 @@ void saturn_cd_hle_device::cmd_set_filter_range()
 
 	hirqreg |= (CMOK|ESEL);
 	cr_standard_return(cd_stat);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_get_filter_range()
@@ -1294,7 +1275,6 @@ void saturn_cd_hle_device::cmd_set_filter_subheader_conditions()
 
 	hirqreg |= (CMOK|ESEL);
 	cr_standard_return(cd_stat);
-	status_type = 0;
 }
 
 
@@ -1311,7 +1291,6 @@ void saturn_cd_hle_device::cmd_get_filter_subheader_conditions()
 	cr4 = (filters[fnum].smval << 8) | (filters[fnum].cival & 0xff);
 
 	hirqreg |= (CMOK|ESEL);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_set_filter_mode()
@@ -1333,7 +1312,6 @@ void saturn_cd_hle_device::cmd_set_filter_mode()
 	LOGCMD("%s: Set Filter Mode filt %x mode %x\n", machine().describe_context(), fnum, mode);
 	hirqreg |= (CMOK|ESEL);
 	cr_standard_return(cd_stat);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_get_filter_mode()
@@ -1348,7 +1326,6 @@ void saturn_cd_hle_device::cmd_get_filter_mode()
 	cr4 = 0;
 
 	hirqreg |= (CMOK|ESEL);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_set_filter_connection()
@@ -1368,7 +1345,6 @@ void saturn_cd_hle_device::cmd_set_filter_connection()
 
 	hirqreg |= (CMOK|ESEL);
 	cr_standard_return(cd_stat);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_reset_selector()
@@ -1403,7 +1379,6 @@ void saturn_cd_hle_device::cmd_reset_selector()
 
 		hirqreg |= (CMOK|ESEL);
 		cr_standard_return(cd_stat);
-		status_type = 0;
 		return;
 	}
 
@@ -1478,7 +1453,6 @@ void saturn_cd_hle_device::cmd_reset_selector()
 
 	hirqreg |= (CMOK|ESEL);
 	cr_standard_return(cd_stat);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_get_buffer_size()
@@ -1490,7 +1464,6 @@ void saturn_cd_hle_device::cmd_get_buffer_size()
 	cr4 = 200;
 	LOGCMD("%s: Get Buffer Size = %d\n", machine().describe_context(), cr2);
 	hirqreg |= (CMOK);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_get_buffer_partition_sector_number()
@@ -1516,11 +1489,10 @@ void saturn_cd_hle_device::cmd_get_buffer_partition_sector_number()
 		//LOGWARN("Partition %08x %04x\n",bufnum,cr4);
 	}
 
-	LOGCMD("%s: Get Sector Number (bufno %d) = %d blocks\n",   machine().describe_context(), bufnum, cr4);
+	LOGCMD("%s: Get Sector Number (bufno %d) = %d blocks\n", machine().describe_context(), bufnum, cr4);
 
 	//LOGWARN("%04x\n",cr4);
 	hirqreg |= (CMOK);
-	status_type = 1;
 }
 
 void saturn_cd_hle_device::cmd_calculate_actual_data_size()
@@ -1548,7 +1520,6 @@ void saturn_cd_hle_device::cmd_calculate_actual_data_size()
 
 	hirqreg |= (CMOK|ESEL);
 	cr_standard_return(cd_stat);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_get_actual_data_size()
@@ -1560,38 +1531,35 @@ void saturn_cd_hle_device::cmd_get_actual_data_size()
 	cr4 = 0;
 	LOGCMD("%s: Get actual block size %06x\n", machine().describe_context(), calcsize);
 	hirqreg |= (CMOK);
-	status_type = 1;
 }
 
 // falcom2
 void saturn_cd_hle_device::cmd_get_sector_information()
 {
-	// get sector info
-	uint32_t sectoffs = cr2 & 0xff;
+	uint32_t sectoffs = cr2;
 	uint32_t bufnum = cr3 >> 8;
+
+	LOGCMD("%s: Get Sector Info (bufno %d sectoffs %04x)\n", machine().describe_context(), bufnum, sectoffs);
 
 	if (bufnum >= MAX_FILTERS || !partitions[bufnum].blocks[sectoffs])
 	{
-		cr1 |= CD_STAT_REJECT & 0xff00;
-		hirqreg |= (CMOK|ESEL);
-		LOGWARN("Get sector info reject\n");
-	}
-	else
-	{
-		cr1 = cd_stat | ((partitions[bufnum].blocks[sectoffs]->FAD >> 16) & 0xff);
-		cr2 = partitions[bufnum].blocks[sectoffs]->FAD & 0xffff;
-		cr3 = ((partitions[bufnum].blocks[sectoffs]->fnum & 0xff) << 8) | (partitions[bufnum].blocks[sectoffs]->chan & 0xff);
-		cr4 = ((partitions[bufnum].blocks[sectoffs]->subm & 0xff) << 8) | (partitions[bufnum].blocks[sectoffs]->cinf & 0xff);
-		hirqreg |= (CMOK|ESEL);
+		LOGWARN("CD: invalid buffer number\n");
+		cr_standard_return(CD_STAT_REJECT);
+		hirqreg |= (CMOK);
+		return;
 	}
 
-	status_type = 0;
+	cr1 = cd_stat | ((partitions[bufnum].blocks[sectoffs]->FAD >> 16) & 0xff);
+	cr2 = partitions[bufnum].blocks[sectoffs]->FAD & 0xffff;
+	cr3 = ((partitions[bufnum].blocks[sectoffs]->fnum & 0xff) << 8) | (partitions[bufnum].blocks[sectoffs]->chan & 0xff);
+	cr4 = ((partitions[bufnum].blocks[sectoffs]->subm & 0xff) << 8) | (partitions[bufnum].blocks[sectoffs]->cinf & 0xff);
+	hirqreg |= (CMOK|ESEL);
 }
 
 void saturn_cd_hle_device::cmd_set_sector_length()
 {
 	// set sector length
-	LOGCMD("%s: Set sector length\n",   machine().describe_context());
+	LOGCMD("%s: Set sector length\n", machine().describe_context());
 
 	switch (cr1 & 0xff)
 	{
@@ -1626,7 +1594,6 @@ void saturn_cd_hle_device::cmd_set_sector_length()
 	}
 	hirqreg |= (CMOK|ESEL);
 	cr_standard_return(cd_stat);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_get_sector_data()
@@ -1636,15 +1603,13 @@ void saturn_cd_hle_device::cmd_get_sector_data()
 	uint32_t sectofs = cr2;
 	uint32_t bufnum = cr3 >> 8;
 
-	LOGCMD("%s: Get sector data (SN %d SO %d BN %d)\n",   machine().describe_context(), sectnum, sectofs, bufnum);
+	LOGCMD("%s: Get sector data (SN %d SO %d BN %d)\n", machine().describe_context(), sectnum, sectofs, bufnum);
 
 	if (bufnum >= MAX_FILTERS)
 	{
-		// TODO: find actual SW that does this
-		// (may conceal a bigger issue)
 		LOGWARN("CD: invalid buffer number\n");
 		cr_standard_return(CD_STAT_REJECT);
-		hirqreg |= (CMOK|EHST);
+		hirqreg |= (CMOK);
 		return;
 	}
 
@@ -1653,8 +1618,8 @@ void saturn_cd_hle_device::cmd_get_sector_data()
 	if (partitions[bufnum].numblks < sectnum)
 	{
 		LOGWARN("CD: buffer is not full %08x %08x\n",partitions[bufnum].numblks,sectnum);
-		cr_standard_return(CD_STAT_REJECT);
-		hirqreg |= (CMOK|EHST);
+		cr_standard_return(cd_stat | CD_STAT_WAIT);
+		hirqreg |= (CMOK);
 		return;
 	}
 
@@ -1669,7 +1634,6 @@ void saturn_cd_hle_device::cmd_get_sector_data()
 	cd_stat |= CD_STAT_TRANS;
 	cr_standard_return(cd_stat);
 	hirqreg |= (CMOK|EHST|DRDY);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_delete_sector_data()
@@ -1680,24 +1644,22 @@ void saturn_cd_hle_device::cmd_delete_sector_data()
 	uint32_t bufnum = cr3 >> 8;
 	int32_t i;
 
-	LOGCMD("%s: Delete sector data (SN %d SO %d BN %d)\n",   machine().describe_context(), sectnum, sectofs, bufnum);
+	LOGCMD("%s: Delete sector data (SN %d SO %d BN %d)\n", machine().describe_context(), sectnum, sectofs, bufnum);
 
 	if (bufnum >= MAX_FILTERS)
 	{
-		// TODO: mustn't happen
 		LOGWARN("CD: invalid buffer number\n");
 		cr_standard_return(CD_STAT_REJECT);
-		hirqreg |= (CMOK|EHST);
+		hirqreg |= (CMOK);
 		return;
 	}
 
 	// pstarcol PS2 does this
-	// TODO: verify if implementation is correct
 	if (partitions[bufnum].numblks == 0)
 	{
 		LOGWARN("CD: buffer is already empty\n");
-		cr_standard_return(CD_STAT_REJECT);
-		hirqreg |= (CMOK|EHST);
+		cr_standard_return(cd_stat | CD_STAT_WAIT);
+		hirqreg |= (CMOK);
 		return;
 	}
 
@@ -1728,7 +1690,6 @@ void saturn_cd_hle_device::cmd_delete_sector_data()
 	cd_stat &= ~CD_STAT_TRANS;
 	cr_standard_return(cd_stat);
 	hirqreg |= (CMOK|EHST);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_get_and_delete_sector_data()
@@ -1739,14 +1700,13 @@ void saturn_cd_hle_device::cmd_get_and_delete_sector_data()
 	uint32_t sectofs = cr2;
 	uint32_t bufnum = cr3 >> 8;
 
-	LOGCMD("%s: Get and delete sector data (SN %d SO %d BN %d)\n",   machine().describe_context(), sectnum, sectofs, bufnum);
+	LOGCMD("%s: Get and delete sector data (SN %d SO %d BN %d)\n", machine().describe_context(), sectnum, sectofs, bufnum);
 
 	if (bufnum >= MAX_FILTERS)
 	{
-		// TODO: mustn't happen
 		LOGWARN("CD: invalid buffer number\n");
 		cr_standard_return(CD_STAT_REJECT);
-		hirqreg |= (CMOK|EHST);
+		hirqreg |= (CMOK);
 		return;
 	}
 
@@ -1754,13 +1714,12 @@ void saturn_cd_hle_device::cmd_get_and_delete_sector_data()
 	// - shadtusk at startup
 	cd_getsectoroffsetnum(bufnum, &sectofs, &sectnum);
 
-	/* yoshimj uses the REJECT status to verify when the data is ready. */
-	// TODO: verify again if it's really REJECT or something else
+	// yoshimj uses the WAIT status to verify when the data is ready.
 	if (partitions[bufnum].numblks < sectnum)
 	{
 		LOGWARN("CD: buffer is not full %08x %08x\n",partitions[bufnum].numblks,sectnum);
-		cr_standard_return(CD_STAT_REJECT);
-		hirqreg |= (CMOK|EHST);
+		cr_standard_return(cd_stat | CD_STAT_WAIT);
+		hirqreg |= (CMOK);
 		return;
 	}
 
@@ -1775,7 +1734,6 @@ void saturn_cd_hle_device::cmd_get_and_delete_sector_data()
 	cd_stat |= CD_STAT_TRANS;
 	cr_standard_return(cd_stat);
 	hirqreg |= (CMOK|EHST|DRDY);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_put_sector_data()
@@ -1787,7 +1745,7 @@ void saturn_cd_hle_device::cmd_put_sector_data()
 	uint32_t sectofs = cr2;
 	uint32_t bufnum = cr3 >> 8;
 
-	LOGCMD("%s: Put sector data (SN %d SO %d BN %d)\n",   machine().describe_context(), sectnum, sectofs, bufnum);
+	LOGCMD("%s: Put sector data (SN %d SO %d BN %d)\n", machine().describe_context(), sectnum, sectofs, bufnum);
 
 	xfertype32 = XFERTYPE32_PUTSECTOR;
 
@@ -1816,68 +1774,89 @@ void saturn_cd_hle_device::cmd_put_sector_data()
 
 	hirqreg |= (CMOK|DRDY);
 	cr_standard_return(cd_stat);
-	status_type = 0;
-}
-
-void saturn_cd_hle_device::cmd_move_sector_data()
-{
-	popmessage("saturn_cd_hle.cpp: cmd_move_sector_data() (unemulated)");
-	hirqreg |= (CMOK);
 }
 
 void saturn_cd_hle_device::cmd_copy_sector_data()
 {
-	// swordsor and riglord2 uses this
-	// TODO: incomplete
+	popmessage("saturn_cd_hle.cpp: cmd_copy_sector_data() (unemulated)");
+	// TODO: essentially same as below minus the deallocation and a guard against being in buffull state
+	// Needs use case, obviously
+	hirqreg |= (CMOK);
+}
+
+void saturn_cd_hle_device::cmd_move_sector_data()
+{
+	// swordsor and riglord2 uses this, extensively as a ring buffer
+	// (to the point they would crash/hang or throw bad sound if not done right)
 	uint32_t src_filter = (cr3 >> 8) & 0xff;
+	uint32_t src_offs = cr2;
 	uint32_t dst_filter = cr1 & 0xff;
-	uint32_t sectnum = cr4 & 0xff;
+	uint32_t sectnum = cr4;
 
-	//cd_stat |= CD_STAT_TRANS;
-	//transpart = &partitions[dst_filter];
+	LOGCMD("%s: Move sector data src %02x dst %02x offs %04x length %04x\n", machine().describe_context(), src_filter, dst_filter, src_offs, sectnum);
 
-	for (int i = 0; i < sectnum; i++)
+	if (src_filter >= MAX_FILTERS || dst_filter >= MAX_FILTERS)
 	{
-		// allocate the dst blocks
-		partitions[dst_filter].blocks[i] = cd_alloc_block(&partitions[dst_filter].bnum[i]);
-		if(partitions[dst_filter].size == -1)
-			partitions[dst_filter].size = 0;
-		partitions[dst_filter].size += partitions[dst_filter].blocks[i]->size;
-		partitions[dst_filter].numblks++;
-
-		//copy data
-		for(int j = 0; j < sectlenin; j++)
-			partitions[dst_filter].blocks[i]->data[j] = partitions[src_filter].blocks[i]->data[j];
-
-		//deallocate the src blocks
-		//partitions[src_filter].size -= partitions[src_filter].blocks[i]->size;
-		//cd_free_block(partitions[src_filter].blocks[i]);
-		//partitions[src_filter].blocks[i] = (blockT *)nullptr;
-		//partitions[src_filter].bnum[i] = 0xff;
+		LOGWARN("CD: invalid buffer copy number\n");
+		cr_standard_return(CD_STAT_REJECT);
+		hirqreg |= (CMOK);
+		return;
 	}
+
+	cd_getsectoroffsetnum(src_filter, &src_offs, &sectnum);
+
+	partitionT *src_part = &partitions[src_filter];
+	partitionT *dst_part = &partitions[dst_filter];
+
+	// TODO: check against source being actually populated here
+
+	for (int i = src_offs; i < src_offs + sectnum; i++)
+	{
+		if (dst_part->numblks >= MAX_BLOCKS || i >= MAX_BLOCKS)
+			throw emu_fatalerror("Move Sector Data: out of bounds %d %d", i, dst_part->numblks);
+
+		// allocate the dst block
+		dst_part->blocks[dst_part->numblks] = cd_alloc_block(&src_part->bnum[i]);
+		if(dst_part->size == -1)
+			dst_part->size = 0;
+		dst_part->size += src_part->blocks[i]->size;
+		dst_part->bnum[dst_part->numblks] = src_part->bnum[i];
+
+		// copy
+		memcpy(&dst_part->blocks[dst_part->numblks]->data[0], &src_part->blocks[i]->data[0], sectlenin);
+
+		dst_part->numblks++;
+
+		// deallocate the src block
+		src_part->size -= src_part->blocks[i]->size;
+		cd_free_block(src_part->blocks[i]);
+		src_part->blocks[i] = (blockT *)nullptr;
+		src_part->bnum[i] = 0xff;
+		src_part->numblks --;
+	}
+
+	cd_defragblocks(src_part);
 
 	hirqreg |= (CMOK|ECPY);
 	cr_standard_return(cd_stat);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_get_sector_data_copy_or_move_error()
 {
 	// get copy error
-	LOGCMD("%s: Get copy error\n",   machine().describe_context());
+	LOGCMD("%s: Get copy error\n", machine().describe_context());
 	cr1 = cd_stat;
 	cr2 = 0;
 	cr3 = 0;
 	cr4 = 0;
 	hirqreg |= (CMOK);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_change_directory()
 {
 	uint32_t temp;
 	// change directory
-	LOGCMD("%s: Change Directory\n",   machine().describe_context());
+	LOGCMD("%s: Change Directory\n", machine().describe_context());
 	hirqreg |= (CMOK|EFLS);
 
 	temp = (cr3 & 0xff) << 16;
@@ -1885,13 +1864,12 @@ void saturn_cd_hle_device::cmd_change_directory()
 
 	read_new_dir(temp);
 	cr_standard_return(cd_stat);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_read_directory()
 {
 	// Read directory entry
-	LOGCMD("%s: Read Directory Entry\n",   machine().describe_context());
+	LOGCMD("%s: Read Directory Entry\n", machine().describe_context());
 //  uint32_t read_dir;
 
 //  read_dir = ((cr3&0xff)<<16)|cr4;
@@ -1906,7 +1884,6 @@ void saturn_cd_hle_device::cmd_read_directory()
 
 	cr_standard_return(cd_stat);
 	hirqreg |= (CMOK|EFLS);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_get_file_scope()
@@ -1919,7 +1896,6 @@ void saturn_cd_hle_device::cmd_get_file_scope()
 	cr3 = 0x0100;   // report directory held
 	cr4 = firstfile;    // first file id
 	LOGWARN("%04x %04x %04x %04x\n",cr1,cr2,cr3,cr4);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_get_target_file_info()
@@ -1927,7 +1903,7 @@ void saturn_cd_hle_device::cmd_get_target_file_info()
 	uint32_t temp;
 
 	// Get File Info
-	LOGCMD("%s: Get File Info\n",   machine().describe_context());
+	LOGCMD("%s: Get File Info\n", machine().describe_context());
 	cd_stat |= CD_STAT_TRANS;
 	cd_stat &= 0xff00;      // clear top byte of return value
 
@@ -1964,7 +1940,7 @@ void saturn_cd_hle_device::cmd_get_target_file_info()
 		cr4 = 0;
 
 		if (curdir[temp].firstfad == 0 || curdir[temp].length == 0)
-			throw emu_fatalerror("File ID not found in XFERTYPE_FILEINFO_1");
+			throw emu_fatalerror("File ID not found in XFERTYPE_FILEINFO_1 id = %d", temp);
 //      LOGWARN("%08x %08x\n",curdir[temp].firstfad,curdir[temp].length);
 		// first 4 bytes = FAD
 		put_u32be(&finfbuf[0], curdir[temp].firstfad);
@@ -1980,41 +1956,63 @@ void saturn_cd_hle_device::cmd_get_target_file_info()
 		xfercount = 0;
 	}
 	LOG("   = %04x %04x %04x %04x %04x\n", hirqreg, cr1, cr2, cr3, cr4);
-	status_type = 0;
 }
 
+// leynos2
 void saturn_cd_hle_device::cmd_read_file()
 {
 	// Read File
-	LOGCMD("%s: Read File\n",   machine().describe_context());
-	uint16_t file_offset,file_filter,file_id,file_size;
+	uint32_t file_offset, file_id, file_size;
+	uint8_t file_filter;
+	LOGCMD("%s: Read File %04x %04x %04x %04x\n", machine().describe_context(), cr1, cr2, cr3, cr4);
 
-	file_offset = ((cr1 & 0xff)<<8)|(cr2 & 0xff); /* correct? */
+	file_offset = ((cr1 & 0xff) << 16) | (cr2);
+	file_id = ((cr3 & 0xff) << 16) | (cr4);
 	file_filter = cr3 >> 8;
-	file_id = ((cr3 & 0xff) << 16)|(cr4);
+
+	if(file_filter >= MAX_FILTERS)
+	{
+		LOGWARN("CD: invalid file filter number\n");
+		cr_standard_return(CD_STAT_REJECT);
+		hirqreg |= (CMOK);
+		return;
+	}
+
+	if (file_id >= curdir.size())
+	{
+		LOGWARN("CD: request for file id %d out of directory space %ld\n", file_id, curdir.size());
+		cr_standard_return(CD_STAT_REJECT);
+		hirqreg |= (CMOK);
+		return;
+	}
+
+	// TODO: doesn't seem enough for leynos2
+	// ask for BANK00.BIN, 107808 size -> 35 sectors
+	// note that 107808 is not an even 2048 number but 52.something
 	file_size = ((curdir[file_id].length + sectlenin - 1) / sectlenin) - file_offset;
 
-	cd_change_status(CD_STAT_PLAY | 0x80);  // set "cd-rom" bit
-	cd_curfad = (curdir[file_id].firstfad + file_offset);
+	LOGCMD("    FAD %d file size %d offset %d sectors %d\n", curdir[file_id].firstfad, curdir[file_id].length, file_offset, file_size);
+
+	cd_curfad = (curdir[file_id].firstfad + file_offset) & 0xffffff;
 	fadstoplay = file_size;
-	if(file_filter < MAX_FILTERS)
-		cddevice = &filters[file_filter];
-	else
-		cddevice = (filterT *)nullptr;
 
-	LOGWARN("Read file %08x (%08x %08x) %02x %d\n",curdir[file_id].firstfad,cd_curfad,fadstoplay,file_filter,sectlenin);
+	cddevice = &filters[file_filter];
 
+	// TODO: does this really overrides filtering mode as Mednafen suggests?
+
+	// TODO: should be behind seek
+	cd_change_status(CD_STAT_PLAY | 0x80);  // set "cd-rom" bit
 	cr_standard_return(cd_stat);
 
 	playtype = 1;
 
+	// FIXME: should be CMOK|EFLS but leynos2 doesn't agree
 	hirqreg |= (CMOK|EHST);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_abort_file()
 {
-	LOGCMD("%s: Abort File\n",   machine().describe_context());
+	LOGCMD("%s: Abort File\n", machine().describe_context());
 	// bios expects "2bc" mask to work against this
 	hirqreg |= (CMOK|EFLS);
 	sectorstore = 0;
@@ -2024,13 +2022,12 @@ void saturn_cd_hle_device::cmd_abort_file()
 		cd_change_status(CD_STAT_PAUSE); // force to pause
 
 	cr_standard_return(cd_stat);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_check_copy_protection()
 {
 	// appears to be copy protection check.  needs only to return OK.
-	LOGCMD("%s: Verify copy protection\n",   machine().describe_context());
+	LOGCMD("%s: Verify copy protection\n", machine().describe_context());
 	if(((cd_stat & 0x0f00) != CD_STAT_NODISC) && ((cd_stat & 0x0f00) != CD_STAT_OPEN))
 		cd_change_status(CD_STAT_PAUSE);
 
@@ -2047,13 +2044,12 @@ void saturn_cd_hle_device::cmd_check_copy_protection()
 		hirqreg = 0x7c5;
 	}
 	cr_standard_return(cd_stat);
-	status_type = 0;
 }
 
 void saturn_cd_hle_device::cmd_get_disc_region()
 {
 	// get disc region
-	LOGCMD("%s: Get disc region\n",   machine().describe_context());
+	LOGCMD("%s: Get disc region\n", machine().describe_context());
 	if(cd_stat != CD_STAT_NODISC && cd_stat != CD_STAT_OPEN)
 		cd_change_status(CD_STAT_PAUSE);
 
@@ -2066,7 +2062,6 @@ void saturn_cd_hle_device::cmd_get_disc_region()
 	cr4 = 0;
 	hirqreg |= (CMOK);
 //  cr_standard_return(cd_stat);
-	status_type = 0;
 
 }
 
@@ -2188,8 +2183,8 @@ void saturn_cd_hle_device::cd_exec_command()
 		case 0x62: cmd_delete_sector_data(); break;
 		case 0x63: cmd_get_and_delete_sector_data(); break;
 		case 0x64: cmd_put_sector_data(); break;
-		case 0x65: cmd_move_sector_data(); break;
-		case 0x66: cmd_copy_sector_data(); break;
+		case 0x65: cmd_copy_sector_data(); break;
+		case 0x66: cmd_move_sector_data(); break;
 		case 0x67: cmd_get_sector_data_copy_or_move_error(); break;
 
 		case 0x70: cmd_change_directory(); break;
@@ -2211,19 +2206,11 @@ void saturn_cd_hle_device::cd_exec_command()
 		case 0xe2: cmd_get_mpeg_card_boot_rom(); break;
 
 		default:
-			LOG("Unknown command %04x\n", cr1>>8);
-			popmessage("saturn_cd_hle.cpp: Unknown command %02x",cr1>>8);
+			LOG("Unhandled command %04x\n", cr1 >> 8);
+			popmessage("saturn_cd_hle.cpp: Unhandled command %02x", cr1 >> 8);
 
 			hirqreg |= (CMOK);
 			break;
-	}
-
-	if(status_type == 1)
-	{
-		prev_cr1 = cr1;
-		prev_cr2 = cr2;
-		prev_cr3 = cr3;
-		prev_cr4 = cr4;
 	}
 }
 
@@ -2231,7 +2218,8 @@ TIMER_CALLBACK_MEMBER( saturn_cd_hle_device::sh1_command_cb )
 {
 	// yield current command until we managed to handle the new status change
 	// - cnc* definitely wants former at FMV playbacks
-	// TODO: do we need to yield for seek as well? asenna dislikes the idea
+	// TODO: do we need to yield for seek as well?
+	// - asenna dislikes the idea
 	if (m_status_change_in_progress)
 	{
 		m_sh1_timer->adjust(attotime::from_hz(get_timing_command()));

@@ -9,14 +9,6 @@
 
 */
 
-/*
-
-    TODO
-
-    - tst.w 0xfffffc
-
-*/
-
 #include "emu.h"
 #include "bus/abckb/abckb.h"
 #include "bus/nscsi/devices.h"
@@ -37,11 +29,10 @@
 #include "softlist_dev.h"
 #include "x37_sasi.h"
 
-
-namespace {
-
 //#define VERBOSE 1
 #include "logmacro.h"
+
+namespace {
 
 #define MC68010_TAG  "14m"
 #define NS32081_TAG  "06o"

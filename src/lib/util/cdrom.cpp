@@ -718,6 +718,11 @@ void cdrom_file::get_info_from_type_string(const char *typestring, uint32_t *trk
 		*trktype = CD_TRACK_AUDIO;
 		*datasize = 2352;
 	}
+	else if (!strcmp(typestring, "CDG"))
+	{
+		*trktype = CD_TRACK_AUDIO;
+		*datasize = 2352;
+	}
 }
 
 /*-------------------------------------------------
@@ -902,6 +907,9 @@ std::error_condition cdrom_file::parse_metadata(chd_file *chd, toc &toc)
 	std::string metadata;
 	std::error_condition err;
 	uint32_t sessionnum = 1;
+	uint32_t sessionindex = 0;
+	uint32_t lastmetaindex = 0;
+	uint32_t metaindex = 0;
 
 	/* clear structures */
 	memset(&toc, 0, sizeof(toc));
@@ -923,19 +931,23 @@ std::error_condition cdrom_file::parse_metadata(chd_file *chd, toc &toc)
 		std::fill(std::begin(pgsub), std::end(pgsub), 0);
 
 		// fetch the session metadata first
-		if (!chd->read_metadata(CDROM_SESSION_METADATA_TAG, toc.numtrks, metadata))
+		if (!chd->read_metadata(CDROM_SESSION_METADATA_TAG, sessionindex, metadata, metaindex))
 		{
-			if (sscanf(metadata.c_str(), CDROM_SESSION_METADATA_FORMAT, &sessionnum) != 1)
-				return chd_file::error::INVALID_DATA;
-		}	
+			if (metaindex-lastmetaindex <= 1) // the session is updated only when the metadata is next in line
+			{
+				if (sscanf(metadata.c_str(), CDROM_SESSION_METADATA_FORMAT, &sessionnum) != 1)
+					return chd_file::error::INVALID_DATA;
+				sessionindex++;
+			}
+		}
 
 		// fetch the metadata for this track
-		if (!chd->read_metadata(CDROM_TRACK_METADATA_TAG, toc.numtrks, metadata))
+		if (!chd->read_metadata(CDROM_TRACK_METADATA_TAG, toc.numtrks, metadata, metaindex))
 		{
 			if (sscanf(metadata.c_str(), CDROM_TRACK_METADATA_FORMAT, &tracknum, type, subtype, &frames) != 4)
 				return chd_file::error::INVALID_DATA;
 		}
-		else if (!chd->read_metadata(CDROM_TRACK_METADATA2_TAG, toc.numtrks, metadata))
+		else if (!chd->read_metadata(CDROM_TRACK_METADATA2_TAG, toc.numtrks, metadata, metaindex))
 		{
 			if (sscanf(metadata.c_str(), CDROM_TRACK_METADATA2_FORMAT, &tracknum, type, subtype, &frames, &pregap, pgtype, pgsub, &postgap) != 8)
 				return chd_file::error::INVALID_DATA;
@@ -943,11 +955,11 @@ std::error_condition cdrom_file::parse_metadata(chd_file *chd, toc &toc)
 		else
 		{
 			// fall through to GD-ROM detection
-			err = chd->read_metadata(GDROM_OLD_METADATA_TAG, toc.numtrks, metadata);
+			err = chd->read_metadata(GDROM_OLD_METADATA_TAG, toc.numtrks, metadata, metaindex);
 			if (!err)
 				toc.flags |= CD_FLAG_GDROMLE; // legacy GDROM track was detected
 			else
-				err = chd->read_metadata(GDROM_TRACK_METADATA_TAG, toc.numtrks, metadata);
+				err = chd->read_metadata(GDROM_TRACK_METADATA_TAG, toc.numtrks, metadata, metaindex);
 
 			if (err)
 				break;
@@ -1000,6 +1012,7 @@ std::error_condition cdrom_file::parse_metadata(chd_file *chd, toc &toc)
 
 		/* set the postgap info */
 		track->postgap = postgap;
+		lastmetaindex = metaindex; 
 	}
 
 	toc.numsessions = sessionnum;
@@ -1102,7 +1115,7 @@ std::error_condition cdrom_file::write_metadata(chd_file *chd, const toc &toc)
 		if (toc.numsessions > 1 && sessionnum != toc.tracks[i].session)
 		{
 			metadata = util::string_format(CDROM_SESSION_METADATA_FORMAT, toc.tracks[i].session+1);
-			err = chd->write_metadata(CDROM_SESSION_METADATA_TAG, i, metadata);
+			err = chd->write_metadata(CDROM_SESSION_METADATA_TAG, toc.tracks[i].session, metadata);
 	
 			if (err)
 				return err;
@@ -2594,6 +2607,8 @@ std::error_condition cdrom_file::parse_cue(std::string_view tocfname, toc &outto
 					osd_printf_verbose("trk %d: fname %s offset %d\n", trknum, outinfo.track[trknum].fname, outinfo.track[trknum].offset);
 				}
 			}
+			
+			const bool is_cdg = !strcmp(token, "CDG");
 
 			convert_type_string_to_track_info(token, &outtoc.tracks[trknum]);
 			if (outtoc.tracks[trknum].datasize == 0)
@@ -2607,6 +2622,13 @@ std::error_condition cdrom_file::parse_cue(std::string_view tocfname, toc &outto
 			TOKENIZE
 
 			convert_subtype_string_to_track_info(token, &outtoc.tracks[trknum]);
+
+			if (is_cdg)
+			{
+				/* CD+G format has no unique subcode. */
+				outtoc.tracks[trknum].subtype = CD_SUB_RAW;
+				outtoc.tracks[trknum].subsize = 96;
+			}
 		}
 		else if (!strcmp(token, "INDEX"))
 		{
@@ -3138,6 +3160,8 @@ std::error_condition cdrom_file::parse_toc(std::string_view tocfname, toc &outto
 			outtoc.tracks[trknum].pgsub = CD_SUB_NONE;
 			outtoc.tracks[trknum].padframes = 0;
 
+			const bool is_cdg = !strcmp(token, "CDG");
+			
 			convert_type_string_to_track_info(token, &outtoc.tracks[trknum]);
 			if (outtoc.tracks[trknum].datasize == 0)
 			{
@@ -3150,6 +3174,13 @@ std::error_condition cdrom_file::parse_toc(std::string_view tocfname, toc &outto
 			TOKENIZE
 
 			convert_subtype_string_to_track_info(token, &outtoc.tracks[trknum]);
+
+			if (is_cdg)
+			{
+				/* CD+G format has no unique subcode. */
+				outtoc.tracks[trknum].subtype = CD_SUB_RAW;
+				outtoc.tracks[trknum].subsize = 96;
+			}
 		}
 		else if (!strcmp(token, "START"))
 		{
