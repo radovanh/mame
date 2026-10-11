@@ -73,6 +73,8 @@ namespace pocketc_bas {
 enum class model : uint8_t
 {
 	PC1350, // single-byte tokens 0x80-0xFF (POCKTOOL: IDENT_NEW_BAS, tokenL=1)
+	PC1401, // PC-1401/1402: single-byte tokens from the ROM table, all text upper-cased
+	PC1403, // PC-1403/1403H: single-byte + 0xEF-prefixed 2-byte tokens from the ROM tables
 	PC1360, // 0xFE-prefixed 2-byte tokens  (POCKTOOL: IDENT_EXT_BAS, tokenL=2)
 	PCG     // 0xFE-prefixed 2-byte tokens, PC-G8xx/PC-E200/PC-E220 family
 	        // (POCKTOOL: IDENT_E_BAS + GRP_G, tokenL=2) -- table only, no

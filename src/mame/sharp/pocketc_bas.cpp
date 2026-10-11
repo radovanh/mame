@@ -185,10 +185,97 @@ const keyword pcg_keywords[] = {
 	{ "WIDTH", 0xFE38 },
 };
 
+// ---------------------------------------------------------------------
+// PC-1401 / PC-1402 keyword table (single-byte tokens).
+//
+// Extracted from the ROM's own keyword table (pc1401.zip: sc61860.a08 +
+// sc613256.d30 -- entries are <0x80|len><NAME><token><handler addr>), not
+// copied from bas2img: every value agrees with the PC-1350/bas2img
+// IDENT_NEW_BAS table, but this ROM lacks the PC-1350's graphics/file
+// keywords (CLS, CURSOR, LINE, PSET, OPEN, SAVE, ...), so those stay
+// plain letters here exactly as the real machine would leave them.
+// No lower-case on this model: strings and REM text are upper-cased too
+// (bas2img's cnvstr_upr).
+// ---------------------------------------------------------------------
+const keyword pc1401_keywords[] = {
+	{ "ABS", 0x99 }, { "ACS", 0x9E }, { "AHC", 0x8E }, { "AHS", 0x8D },
+	{ "AHT", 0x8F }, { "AND", 0xA1 }, { "AREAD", 0xE1 }, { "ASC", 0xA4 },
+	{ "ASN", 0x9D }, { "ATN", 0x9F }, { "BEEP", 0xC4 }, { "CALL", 0xCC },
+	{ "CHR$", 0xA8 }, { "CLEAR", 0xC9 }, { "CLOAD", 0xB7 }, { "CONT", 0xB2 },
+	{ "COS", 0x96 }, { "CSAVE", 0xB6 }, { "CUR", 0x89 }, { "DATA", 0xDC },
+	{ "DECI", 0x84 }, { "DEG", 0x9B }, { "DEGREE", 0xC1 }, { "DIM", 0xCB },
+	{ "DMS", 0x9C }, { "END", 0xD8 }, { "EXP", 0x93 }, { "FACT", 0x90 },
+	{ "FOR", 0xD5 }, { "GOSUB", 0xE0 }, { "GOTO", 0xC6 }, { "GRAD", 0xC3 },
+	{ "HCS", 0x8B }, { "HEX", 0x85 }, { "HSN", 0x8A }, { "HTN", 0x8C },
+	{ "IF", 0xD4 }, { "INKEY$", 0xAD }, { "INPUT", 0xDF }, { "INT", 0x98 },
+	{ "LEFT$", 0xAB }, { "LEN", 0xA6 }, { "LET", 0xD6 }, { "LIST", 0xB4 },
+	{ "LLIST", 0xB5 }, { "LN", 0x91 }, { "LOG", 0x92 }, { "LPRINT", 0xE2 },
+	{ "MEM", 0xAF }, { "MID$", 0xAA }, { "NEW", 0xB1 }, { "NEXT", 0xD9 },
+	{ "NOT", 0xA3 }, { "ON", 0xD3 }, { "OR", 0xA2 }, { "PASS", 0xB3 },
+	{ "PAUSE", 0xDD }, { "PEEK", 0xA7 }, { "PI", 0xAE }, { "POKE", 0xCD },
+	{ "POL", 0x82 }, { "PRINT", 0xDE }, { "RADIAN", 0xC2 }, { "RANDOM", 0xC0 },
+	{ "RCP", 0x87 }, { "READ", 0xDB }, { "REC", 0x81 }, { "REM", 0xD7 },
+	{ "RESTORE", 0xE4 }, { "RETURN", 0xE3 }, { "RIGHT$", 0xAC }, { "RND", 0xA0 },
+	{ "ROT", 0x83 }, { "RUN", 0xB0 }, { "SGN", 0x9A }, { "SIN", 0x95 },
+	{ "SQR", 0x94 }, { "SQU", 0x88 }, { "STEP", 0xD1 }, { "STOP", 0xDA },
+	{ "STR$", 0xA9 }, { "TAN", 0x97 }, { "TEN", 0x86 }, { "THEN", 0xD2 },
+	{ "TO", 0xD0 }, { "TROFF", 0xC8 }, { "TRON", 0xC7 }, { "USING", 0xCA },
+	{ "VAL", 0xA5 }, { "WAIT", 0xC5 },
+};
+
+// ---------------------------------------------------------------------
+// PC-1403 / PC-1403H keyword table (mixed single-byte and 0xEF-prefixed
+// 2-byte tokens).
+//
+// Extracted from the ROM's own keyword tables (pc1403.zip: introm.bin +
+// extrom08-0b.bin). The main table matches the PC-1350 values; the
+// separate 0xEF table has exactly these 17 entries (bas2img's shared
+// 1403/1425/1440/1460 block lists ~48, most of which this ROM doesn't
+// know). XOR = 0xEFA1 is also confirmed against a real PC-1403 MAME save
+// state ("20 A=5 XOR 3" -> 41 3D 35 EF A1 33 0D).
+// ---------------------------------------------------------------------
+const keyword pc1403_keywords[] = {
+	{ "ABS", 0x99 }, { "ACS", 0x9E }, { "AHC", 0x8E }, { "AHS", 0x8D },
+	{ "AHT", 0x8F }, { "AND", 0xA1 }, { "AREAD", 0xE1 }, { "AS", 0xEFE2 },
+	{ "ASC", 0xA4 }, { "ASN", 0x9D }, { "ATN", 0x9F }, { "BEEP", 0xC4 },
+	{ "CALL", 0xCC }, { "CHAIN", 0xE5 }, { "CHR$", 0xA8 }, { "CLEAR", 0xC9 },
+	{ "CLOAD", 0xB7 }, { "CLOSE", 0xBC }, { "CONT", 0xB2 }, { "COPY", 0xEFB6 },
+	{ "COS", 0x96 }, { "CSAVE", 0xB6 }, { "CUR", 0x89 }, { "DATA", 0xDC },
+	{ "DECI", 0x84 }, { "DEG", 0x9B }, { "DEGREE", 0xC1 }, { "DELETE", 0xEFA9 },
+	{ "DIM", 0xCB }, { "DMS", 0x9C }, { "DSKF", 0xEF81 }, { "END", 0xD8 },
+	{ "EOF", 0xEF80 }, { "EXP", 0x93 }, { "FACT", 0x90 }, { "FILES", 0xEFB0 },
+	{ "FOR", 0xD5 }, { "GOSUB", 0xE0 }, { "GOTO", 0xC6 }, { "GRAD", 0xC3 },
+	{ "HCS", 0x8B }, { "HEX", 0x85 }, { "HSN", 0x8A }, { "HTN", 0x8C },
+	{ "IF", 0xD4 }, { "INIT", 0xEFB2 }, { "INKEY$", 0xAD }, { "INPUT", 0xDF },
+	{ "INT", 0x98 }, { "KILL", 0xEFB3 }, { "LEFT$", 0xAB }, { "LEN", 0xA6 },
+	{ "LET", 0xD6 }, { "LFILES", 0xEFB1 }, { "LIST", 0xB4 }, { "LLIST", 0xB5 },
+	{ "LN", 0x91 }, { "LOAD", 0xBE }, { "LOC", 0xEF83 }, { "LOF", 0xEF82 },
+	{ "LOG", 0x92 }, { "LPRINT", 0xE2 }, { "MDF", 0x80 }, { "MEM", 0xAF },
+	{ "MERGE", 0xB8 }, { "MID$", 0xAA }, { "NAME", 0xEFB4 }, { "NEW", 0xB1 },
+	{ "NEXT", 0xD9 }, { "NOT", 0xA3 }, { "ON", 0xD3 }, { "OPEN", 0xBB },
+	{ "OR", 0xA2 }, { "OUTPUT", 0xEFE0 }, { "PASS", 0xB3 }, { "PAUSE", 0xDD },
+	{ "PEEK", 0xA7 }, { "PI", 0xAE }, { "POKE", 0xCD }, { "POL", 0x82 },
+	{ "PRINT", 0xDE }, { "RADIAN", 0xC2 }, { "RANDOM", 0xC0 }, { "RCP", 0x87 },
+	{ "READ", 0xDB }, { "REC", 0x81 }, { "REM", 0xD7 }, { "RENUM", 0xEFA8 },
+	{ "RESTORE", 0xE4 }, { "RETURN", 0xE3 }, { "RIGHT$", 0xAC }, { "RND", 0xA0 },
+	{ "ROT", 0x83 }, { "RUN", 0xB0 }, { "SAVE", 0xBD }, { "SET", 0xEFB5 },
+	{ "SGN", 0x9A }, { "SIN", 0x95 }, { "SQR", 0x94 }, { "SQU", 0x88 },
+	{ "STEP", 0xD1 }, { "STOP", 0xDA }, { "STR$", 0xA9 }, { "TAN", 0x97 },
+	{ "TEN", 0x86 }, { "THEN", 0xD2 }, { "TO", 0xD0 }, { "TROFF", 0xC8 },
+	{ "TRON", 0xC7 }, { "USING", 0xCA }, { "VAL", 0xA5 }, { "WAIT", 0xC5 },
+	{ "XOR", 0xEFA1 },
+};
+
 struct model_traits
 {
 	const keyword *table;
 	size_t table_len;
+	// optional second table searched together with the first (model-
+	// specific additions on top of a shared base table)
+	const keyword *extra;
+	size_t extra_len;
+	// emission width is decided per token (> 0xFF -> 2 bytes), so mixed
+	// 1/2-byte tables like PC-1403's work; kept for documentation only
 	bool two_byte;
 	// true: jump targets after GOTO/GOSUB/THEN (and ON...GOTO/GOSUB lists)
 	// are stored as 0x1F + 16-bit big-endian binary line number
@@ -200,23 +287,36 @@ struct model_traits
 	// character, and GOTO/GOSUB fail at run time.
 	bool binary_line_refs;
 	uint16_t rem_tok, goto_tok, gosub_tok, then_tok, on_tok;
+	// true: letters outside string literals are stored upper-case (bas2img
+	// always does this; enabled only for the models added later, so the
+	// already hardware-verified PC-1350/1360/PCG output is untouched)
+	bool upper_code;
+	// true: string literals and REM text are upper-cased too (bas2img's
+	// cnvstr_upr -- PC-1401/1402 have no lower-case characters)
+	bool upper_strings;
 };
 
 const model_traits &traits_for(model m)
 {
-	static const model_traits k1350{ pc1350_keywords, std::size(pc1350_keywords), false, false,
-		0xD7, 0xC6, 0xE0, 0xD2, 0xD3 };
-	static const model_traits k1360{ pc1360_keywords, std::size(pc1360_keywords), true, true,
-		0xFE59, 0xFE2B, 0xFE62, 0xFE54, 0xFE55 };
+	static const model_traits k1350{ pc1350_keywords, std::size(pc1350_keywords), nullptr, 0, false, false,
+		0xD7, 0xC6, 0xE0, 0xD2, 0xD3, false, false };
+	static const model_traits k1401{ pc1401_keywords, std::size(pc1401_keywords), nullptr, 0, false, false,
+		0xD7, 0xC6, 0xE0, 0xD2, 0xD3, true, true };
+	static const model_traits k1403{ pc1403_keywords, std::size(pc1403_keywords), nullptr, 0, false, false,
+		0xD7, 0xC6, 0xE0, 0xD2, 0xD3, true, false };
+	static const model_traits k1360{ pc1360_keywords, std::size(pc1360_keywords), nullptr, 0, true, true,
+		0xFE59, 0xFE2B, 0xFE62, 0xFE54, 0xFE55, false, false };
 	// REM/GOTO/GOSUB/THEN/ON all come from the block shared with PC-1360's
 	// table (see pcg_keywords above), so the PCG family's special token
 	// values are identical to PC-1360's.
-	static const model_traits kpcg{ pcg_keywords, std::size(pcg_keywords), true, true,
-		0xFE59, 0xFE2B, 0xFE62, 0xFE54, 0xFE55 };
+	static const model_traits kpcg{ pcg_keywords, std::size(pcg_keywords), nullptr, 0, true, true,
+		0xFE59, 0xFE2B, 0xFE62, 0xFE54, 0xFE55, false, false };
 
 	switch (m)
 	{
 	case model::PC1350: return k1350;
+	case model::PC1401: return k1401;
+	case model::PC1403: return k1403;
 	case model::PCG:    return kpcg;
 	case model::PC1360:
 	default:            return k1360;
@@ -232,15 +332,21 @@ bool match_keyword(const model_traits &t, const char *upper_rest, size_t remaini
 {
 	size_t best_len = 0;
 	uint16_t best_token = 0;
-	for (size_t i = 0; i < t.table_len; i++)
+	auto scan = [&] (const keyword *table, size_t len)
 	{
-		size_t klen = std::strlen(t.table[i].name);
-		if (klen > best_len && klen <= remaining && std::memcmp(upper_rest, t.table[i].name, klen) == 0)
+		for (size_t i = 0; i < len; i++)
 		{
-			best_len = klen;
-			best_token = t.table[i].token;
+			size_t klen = std::strlen(table[i].name);
+			if (klen > best_len && klen <= remaining && std::memcmp(upper_rest, table[i].name, klen) == 0)
+			{
+				best_len = klen;
+				best_token = table[i].token;
+			}
 		}
-	}
+	};
+	scan(t.table, t.table_len);
+	if (t.extra)
+		scan(t.extra, t.extra_len);
 	if (best_len == 0)
 		return false;
 	token = best_token;
@@ -308,7 +414,7 @@ bool tokenize_program(model m, const std::string &source, std::vector<uint8_t> &
 
 			if (in_string)
 			{
-				content.push_back((uint8_t)c);
+				content.push_back((uint8_t)(t.upper_strings ? std::toupper((unsigned char)c) : c));
 				if (c == '"')
 					in_string = false;
 				p++;
@@ -388,32 +494,20 @@ bool tokenize_program(model m, const std::string &source, std::vector<uint8_t> &
 					// space (bas2img's "delREMspc"), then copy the rest of
 					// the line completely verbatim -- it's comment text,
 					// not code, so no further tokenizing or space-removal.
-					if (t.two_byte)
-					{
+					if (token > 0xFF)
 						content.push_back((uint8_t)(token >> 8));
-						content.push_back((uint8_t)(token & 0xFF));
-					}
-					else
-					{
-						content.push_back((uint8_t)token);
-					}
+					content.push_back((uint8_t)(token & 0xFF));
 					p += matched_len;
 					if (p < raw_line.size() && raw_line[p] == ' ')
 						p++;
 					for (; p < raw_line.size(); p++)
-						content.push_back((uint8_t)raw_line[p]);
+						content.push_back((uint8_t)(t.upper_strings ? std::toupper((unsigned char)raw_line[p]) : raw_line[p]));
 					break;
 				}
 
-				if (t.two_byte)
-				{
+				if (token > 0xFF)
 					content.push_back((uint8_t)(token >> 8));
-					content.push_back((uint8_t)(token & 0xFF));
-				}
-				else
-				{
-					content.push_back((uint8_t)token);
-				}
+				content.push_back((uint8_t)(token & 0xFF));
 
 				if (t.binary_line_refs)
 				{
@@ -429,7 +523,7 @@ bool tokenize_program(model m, const std::string &source, std::vector<uint8_t> &
 
 			// Plain literal byte: digit, identifier letter, operator,
 			// punctuation, or parenthesis.
-			content.push_back((uint8_t)c);
+			content.push_back((uint8_t)(t.upper_code ? std::toupper((unsigned char)c) : c));
 			p++;
 		}
 

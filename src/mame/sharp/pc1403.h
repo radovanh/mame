@@ -13,6 +13,12 @@
 
 #include "pocketc.h"
 
+#include <string>
+#include <system_error>
+#include <utility>
+
+class snapshot_image_device;
+
 class pc1403_state : public pocketc_state
 {
 public:
@@ -25,6 +31,12 @@ public:
 
 	void pc1403(machine_config &config);
 	void pc1403h(machine_config &config);
+
+	// QUICKLOAD callback ("quikload" slot in pocketc.cpp): tokenizes a
+	// plain-text .BAS file (pocketc_bas, PC1403 model) and writes it
+	// straight into the program area. Public because the device config
+	// code binding it via FUNC(...) isn't a member of this class.
+	std::pair<std::error_condition, std::string> quickload_cb(snapshot_image_device &image);
 
 protected:
 	virtual void machine_start() override ATTR_COLD;
@@ -55,6 +67,10 @@ private:
 	uint8_t m_portc = 0;
 	uint8_t m_asic[4]{};
 	uint8_t m_reg[0x100]{};
+
+	// lowest RAM address (0xE000 on PC-1403, 0x8000 on PC-1403H); set by
+	// the machine config. The program area starts at m_ram_base + 0x30.
+	uint16_t m_ram_base = 0xe000;
 
 	static const char* const s_line[5];
 	static const char* const s_busy[5];

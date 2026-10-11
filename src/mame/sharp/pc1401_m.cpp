@@ -5,7 +5,9 @@
 
 #include "pocketc.h"
 #include "pc1401.h"
+#include "pocketc_bas.h"
 #include "machine/ram.h"
+#include "imagedev/snapquik.h"
 
 /* C-CE while reset, program will not be destroyed! */
 
@@ -158,4 +160,66 @@ void pc1401_state::machine_reset()
 		for (offs_t a = 0x47B1; a <= 0x47FF; a++)
 			space.write_byte(a, 0x0D);
 	}
+}
+
+/*
+ * pc1401_state::quickload_cb -- .BAS quickload for PC-1401 / PC-1402
+ * ---------------------------------------------------------------------
+ * Same method as pc1360_state::quickload_cb(): tokenize the text file
+ * (pocketc_bas, PC1401 model = this ROM's own single-byte keyword table,
+ * text upper-cased), then write it into the program area and update the
+ * BASIC system pointers.
+ *
+ * Pointers (from the save-state diff behind machine_reset() above):
+ *   0x46E1/0x46E2 = start of program (points at the leading 0xFF)
+ *   0x46E3/0x46E4 = end of program   (points at the trailing 0xFF)
+ * An empty program is start=0x3C00, end=0x3C01, both bytes 0xFF -- the
+ * same layout as PC-1360 and PC-1403.
+ *
+ * The start pointer is read live. If it isn't inside RAM it falls back to
+ * 0x3C00, the value a real NEW leaves on PC-1401. The end of the program
+ * must stay below 0x46B0, where the system work area starts (first byte
+ * the NEW diff touched is 0x46B7). The real top of the user area may be
+ * a little lower; the ROM's own memory checks still apply at run time.
+ */
+std::pair<std::error_condition, std::string> pc1401_state::quickload_cb(snapshot_image_device &image)
+{
+	uint64_t size = image.length();
+	std::vector<char> text(size);
+	if (size > 0 && image.fread(text.data(), size) != size)
+		return std::make_pair(std::errc::io_error, std::string("Error reading file"));
+
+	std::vector<uint8_t> tokenized;
+	std::string error;
+	if (!pocketc_bas::tokenize_program(pocketc_bas::model::PC1401, std::string(text.data(), size), tokenized, error))
+		return std::make_pair(std::errc::invalid_argument, error);
+
+	address_space &space = m_maincpu->space(AS_PROGRAM);
+
+	constexpr uint32_t PTR_START = 0x46e1;
+	constexpr uint32_t PTR_END   = 0x46e3;
+	constexpr uint32_t AREA_TOP  = 0x46b0; // first byte that must not be overwritten
+
+	uint32_t start = space.read_byte(PTR_START) | (space.read_byte(PTR_START + 1) << 8);
+	if (start < m_ram_base || start >= AREA_TOP)
+		start = 0x3c00; // pointer not initialised -- use the PC-1401 NEW value
+
+	const uint32_t end = start + uint32_t(tokenized.size()); // address of the trailing 0xFF
+	if (end >= AREA_TOP)
+	{
+		return std::make_pair(std::errc::file_too_large,
+			util::string_format("Tokenized program (%u bytes) does not fit: %u bytes free from %04X",
+				(unsigned)tokenized.size(), (unsigned)(AREA_TOP - 1 - start), start));
+	}
+
+	space.write_byte(start, 0xff); // leading sentinel
+	for (size_t i = 0; i < tokenized.size(); i++)
+		space.write_byte(start + 1 + i, tokenized[i]); // ends with the trailing 0xFF
+
+	space.write_byte(PTR_START,     start & 0xff);
+	space.write_byte(PTR_START + 1, start >> 8);
+	space.write_byte(PTR_END,       end & 0xff);
+	space.write_byte(PTR_END + 1,   end >> 8);
+
+	return std::make_pair(std::error_condition(), std::string());
 }

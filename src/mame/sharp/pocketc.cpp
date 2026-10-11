@@ -1166,12 +1166,16 @@ void pc1401_state::pc1401(machine_config &config)
 	m_maincpu->out_c_cb().set(FUNC(pc1401_state::out_c_w));
 
 	m_screen->set_screen_update(FUNC(pc1401_state::screen_update));
+
+	// Direct-memory BASIC quickload (.bas/.txt), see pc1401_m.cpp
+	QUICKLOAD(config, "quikload", "bas,txt", attotime::zero).set_load_callback(FUNC(pc1401_state::quickload_cb));
 }
 
 void pc1401_state::pc1402(machine_config &config)
 {
 	pc1401(config);
 	m_maincpu->set_addrmap(AS_PROGRAM, &pc1401_state::pc1402_mem);
+	m_ram_base = 0x2000;
 }
 
 void pc1251_state::pc1250(machine_config &config)
@@ -1393,12 +1397,16 @@ void pc1403_state::pc1403(machine_config &config)
 	m_screen->set_size(848, 320);
 	m_screen->set_visarea(0, 848-1, 0, 320-1);
 	m_screen->set_screen_update(FUNC(pc1403_state::screen_update));
+
+	// Direct-memory BASIC quickload (.bas/.txt), see pc1403_m.cpp
+	QUICKLOAD(config, "quikload", "bas,txt", attotime::zero).set_load_callback(FUNC(pc1403_state::quickload_cb));
 }
 
 void pc1403_state::pc1403h(machine_config &config)
 {
 	pc1403(config);
 	m_maincpu->set_addrmap(AS_PROGRAM, &pc1403_state::pc1403h_mem);
+	m_ram_base = 0x8000;
 }
 
 

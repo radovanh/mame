@@ -5,7 +5,9 @@
 
 #include "pocketc.h"
 #include "pc1403.h"
+#include "pocketc_bas.h"
 #include "machine/ram.h"
+#include "imagedev/snapquik.h"
 
 #define LOG_ASIC (1U << 1)
 
@@ -101,4 +103,68 @@ void pc1403_state::machine_start()
 	uint8_t *gfx = memregion("gfx1")->base();
 	for (int i = 0; i < 128; i++)
 		gfx[i] = i;
+}
+
+/*
+ * pc1403_state::quickload_cb -- .BAS quickload for PC-1403 / PC-1403H
+ * ---------------------------------------------------------------------
+ * Tokenizes the text file (pocketc_bas, PC1403 model = this ROM's own
+ * keyword tables, single-byte + 0xEF-prefixed) and writes it into the
+ * program area.
+ *
+ * Layout confirmed by diffing real save states (NEW, then
+ * 10 PRINT "HELLO") on both pc1403 (RAM 0xE000-0xFFFF) and pc1403h
+ * (RAM 0x8000-0xFFFF) -- the same ROM, only the RAM base differs:
+ *   0xFF01/0xFF02 = start of program = RAM base + 0x30 (leading 0xFF)
+ *   0xFF03/0xFF04 = end of program   (points at the trailing 0xFF)
+ *   RAM base + 0x07..0x0A holds a second copy of both pointers, which the
+ *   ROM updates together with 0xFF01-0xFF04 whenever a line is entered,
+ *   so both copies are written here.
+ * The fixed variables A-Z sit just below 0xFB10 (the ROM's free-memory
+ * figure for a 1403 is 0xFB10 - 0xE030 - 2), so the program must end
+ * below that.
+ */
+std::pair<std::error_condition, std::string> pc1403_state::quickload_cb(snapshot_image_device &image)
+{
+	uint64_t size = image.length();
+	std::vector<char> text(size);
+	if (size > 0 && image.fread(text.data(), size) != size)
+		return std::make_pair(std::errc::io_error, std::string("Error reading file"));
+
+	std::vector<uint8_t> tokenized;
+	std::string error;
+	if (!pocketc_bas::tokenize_program(pocketc_bas::model::PC1403, std::string(text.data(), size), tokenized, error))
+		return std::make_pair(std::errc::invalid_argument, error);
+
+	address_space &space = m_maincpu->space(AS_PROGRAM);
+
+	constexpr uint32_t PTR_START = 0xff01; // start at +0/+1, end at +2/+3
+	constexpr uint32_t AREA_TOP  = 0xfb10; // fixed variables start here
+	const uint32_t copy = m_ram_base + 0x07; // ROM-maintained pointer copy
+
+	uint32_t start = space.read_byte(PTR_START) | (space.read_byte(PTR_START + 1) << 8);
+	if (start < m_ram_base + 0x30 || start >= AREA_TOP)
+		start = m_ram_base + 0x30; // pointer not initialised -- use the NEW value
+
+	const uint32_t end = start + uint32_t(tokenized.size()); // address of the trailing 0xFF
+	if (end >= AREA_TOP)
+	{
+		return std::make_pair(std::errc::file_too_large,
+			util::string_format("Tokenized program (%u bytes) does not fit: %u bytes free from %04X",
+				(unsigned)tokenized.size(), (unsigned)(AREA_TOP - 1 - start), start));
+	}
+
+	space.write_byte(start, 0xff); // leading sentinel
+	for (size_t i = 0; i < tokenized.size(); i++)
+		space.write_byte(start + 1 + i, tokenized[i]); // ends with the trailing 0xFF
+
+	for (uint32_t base : { PTR_START, copy })
+	{
+		space.write_byte(base + 0, start & 0xff);
+		space.write_byte(base + 1, start >> 8);
+		space.write_byte(base + 2, end & 0xff);
+		space.write_byte(base + 3, end >> 8);
+	}
+
+	return std::make_pair(std::error_condition(), std::string());
 }
