@@ -102,7 +102,7 @@ const sc61860_disassembler::opcode sc61860_disassembler::table[]={
 	{ "SWP",    Imp }, { "LDM",     Imp }, { "SL",      Imp }, { "POP",     Imp },
 	{ nullptr,        Ill }, { "OUTA",    Imp }, { nullptr,         Ill }, { "OUTF",    Imp },
 
-//    60-5F / 0-3 4-7 8-B C-F
+//    60-6F / 0-3 4-7 8-B C-F
 	{ "ANIM",   Imm }, { "ORIM",    Imm }, { "TSIM",    Imm }, { "CPIM",    Imm },
 	{ "ANIA",   Imm }, { "ORIA",    Imm }, { "TSIA",    Imm }, { "CPIA",    Imm },
 	{ nullptr,        Ill }, { "ETC",     Etc }, { nullptr,         Ill }, { "TEST",    Imm },
