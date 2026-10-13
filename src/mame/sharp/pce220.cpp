@@ -30,7 +30,6 @@
 
 #include "cpu/z80/z80.h"
 #include "imagedev/snapquik.h"
-#include "machine/input_merger.h"
 #include "machine/nvram.h"
 #include "machine/ram.h"
 #include "machine/timer.h"
@@ -58,7 +57,6 @@ public:
 		, m_banks(*this, "bank%u", 1)
 		, m_beep(*this, "beeper")
 		, m_lcdc(*this, "hd61202")
-		, m_input_merger(*this, "input_merger")
 		, m_serial(*this, "serial")
 		, m_keyboard(*this, "LINE%u", 0)
 		, m_io_on(*this, "ON")
@@ -87,7 +85,6 @@ protected:
 	required_memory_bank_array<4> m_banks;
 	required_device<beep_device> m_beep;
 	optional_device<hd61202_device> m_lcdc;
-	required_device<input_merger_device> m_input_merger;
 	required_device<pce220_serial_device> m_serial;
 
 	required_ioport_array<10> m_keyboard;
@@ -98,10 +95,11 @@ protected:
 
 	//basic machine
 	uint8_t m_bank_num;
-	uint8_t m_irq_mask;
-	uint8_t m_irq_flag;
-	uint8_t m_timer_status;
+	uint8_t m_irq_mask;     // port 17h
+	uint8_t m_irq_flag;     // port 16h, latched requests
+	uint8_t m_timer_status; // port 14h bit 0
 	uint16_t m_kb_matrix;
+	uint8_t m_kb_state;     // strobed key inputs, for change detection
 	uint8_t m_power_state;
 
 	uint8_t m_port15;
@@ -131,9 +129,14 @@ protected:
 	uint8_t port1f_r();
 	void kb_matrix_w(offs_t offset, uint8_t data);
 	uint8_t kb_r();
+	uint8_t kb_scan();
+	void kb_update();
 	uint8_t irq_status_r();
 	void irq_ack_w(uint8_t data);
+	uint8_t irq_mask_r();
 	void irq_mask_w(uint8_t data);
+	void irq_set(uint8_t flags);
+	void irq_update();
 	void install_bootrom();
 
 	void pce220_io_common(address_map &map) ATTR_COLD;
@@ -411,7 +414,7 @@ uint8_t pce220_state::timer_r()
 
 void pce220_state::timer_w(uint8_t data)
 {
-	m_input_merger->in_w<2>(CLEAR_LINE);
+	// any write clears the timer flag; the latched request in 16h is not affected
 	m_timer_status = 0;
 }
 
@@ -510,9 +513,12 @@ void pce220_state::kb_matrix_w(offs_t offset, uint8_t data)
 		m_kb_matrix = (m_kb_matrix & 0xff) | ((data&0x03)<<8);
 		break;
 	}
+
+	// strobing a row with a key held down is a change of the key inputs too
+	kb_update();
 }
 
-uint8_t pce220_state::kb_r()
+uint8_t pce220_state::kb_scan()
 {
 	uint8_t data = 0x00;
 
@@ -523,32 +529,62 @@ uint8_t pce220_state::kb_r()
 	return data;
 }
 
+uint8_t pce220_state::kb_r()
+{
+	return kb_scan();
+}
+
+void pce220_state::kb_update()
+{
+	// the keyboard request is latched on any change of the strobed key
+	// inputs: press, release, or a strobe enabled while a key is held
+	uint8_t const data = kb_scan();
+	if (data != m_kb_state)
+	{
+		m_kb_state = data;
+		irq_set(IRQ_FLAG_KEY);
+	}
+}
+
 uint8_t pce220_state::irq_status_r()
 {
 	/*
 	---- -x-- timer
-	---- --x- ON-Key
+	---- --x- ON key
 	---- ---x keyboard
+	requests are latched whether or not they are enabled in 17h
 	*/
 	return m_irq_flag;
 }
 
 void pce220_state::irq_ack_w(uint8_t data)
 {
+	// writing 1 clears the corresponding request
 	m_irq_flag &= ~data;
+	irq_update();
+}
 
-	// release the IRQ line of each source acknowledged via port 16h
-	if (data & IRQ_FLAG_KEY)
-		m_input_merger->in_w<0>(CLEAR_LINE);
-	if (data & IRQ_FLAG_ON)
-		m_input_merger->in_w<1>(CLEAR_LINE);
-	if (data & IRQ_FLAG_TIMER)
-		m_input_merger->in_w<2>(CLEAR_LINE);
+uint8_t pce220_state::irq_mask_r()
+{
+	return m_irq_mask;
 }
 
 void pce220_state::irq_mask_w(uint8_t data)
 {
 	m_irq_mask = data;
+	irq_update();
+}
+
+void pce220_state::irq_set(uint8_t flags)
+{
+	m_irq_flag |= flags;
+	irq_update();
+}
+
+void pce220_state::irq_update()
+{
+	// /INT is a level: any latched request that is enabled in 17h
+	m_maincpu->set_input_line(0, (m_irq_flag & m_irq_mask) ? ASSERT_LINE : CLEAR_LINE);
 }
 
 uint8_t pcg850v_state::g850v_bank_r()
@@ -593,7 +629,7 @@ void pce220_state::pce220_io_common(address_map &map)
 	map(0x14, 0x14).rw(FUNC(pce220_state::timer_r), FUNC(pce220_state::timer_w));
 	map(0x15, 0x15).rw(FUNC(pce220_state::port15_r), FUNC(pce220_state::port15_w));
 	map(0x16, 0x16).rw(FUNC(pce220_state::irq_status_r), FUNC(pce220_state::irq_ack_w));
-	map(0x17, 0x17).w(FUNC(pce220_state::irq_mask_w));
+	map(0x17, 0x17).rw(FUNC(pce220_state::irq_mask_r), FUNC(pce220_state::irq_mask_w));
 	map(0x18, 0x18).rw(FUNC(pce220_state::port18_r), FUNC(pce220_state::port18_w));
 	map(0x19, 0x19).rw(FUNC(pce220_state::rom_bank_r), FUNC(pce220_state::rom_bank_w));
 	map(0x1a, 0x1a).w(FUNC(pce220_state::boot_bank_w));
@@ -714,27 +750,21 @@ void pcg850v_state::port60_w(uint8_t data)
 
 INPUT_CHANGED_MEMBER(pce220_state::kb_irq)
 {
-	if (m_irq_mask & IRQ_FLAG_KEY)
-	{
-		m_input_merger->in_w<0>(newval ? ASSERT_LINE : CLEAR_LINE);
-
-		m_irq_flag = (m_irq_flag & 0xfe) | (newval & 0x01);
-	}
+	kb_update();
 }
 
 INPUT_CHANGED_MEMBER(pce220_state::on_irq)
 {
-	if (m_irq_mask & IRQ_FLAG_ON)
+	// the ON key request is latched on press only
+	if (newval && !oldval)
 	{
-		if (!(m_power_state & 1))
+		if ((m_irq_mask & IRQ_FLAG_ON) && !(m_power_state & 1))
 		{
 			install_bootrom();
 			m_maincpu->reset();
 		}
 
-		m_input_merger->in_w<1>(newval ? ASSERT_LINE : CLEAR_LINE);
-
-		m_irq_flag = (m_irq_flag & 0xfd) | ((newval & 0x01)<<1);
+		irq_set(IRQ_FLAG_ON);
 	}
 }
 
@@ -962,6 +992,7 @@ void pce220_state::machine_start()
 	save_item(NAME(m_irq_flag));
 	save_item(NAME(m_timer_status));
 	save_item(NAME(m_kb_matrix));
+	save_item(NAME(m_kb_state));
 	save_item(NAME(m_power_state));
 	save_item(NAME(m_port15));
 	save_item(NAME(m_port18));
@@ -996,10 +1027,12 @@ void pce220_state::machine_reset()
 	m_irq_flag = 0;
 	m_timer_status = 0;
 	m_kb_matrix = 0;
+	m_kb_state = 0;
 	m_power_state = 0;
 	m_port15 = 0;
 	m_port18 = 0;
 	m_battery_sel = 0;
+	irq_update();
 }
 
 void pcg850v_state::machine_reset()
@@ -1153,13 +1186,11 @@ std::pair<std::error_condition, std::string> pcg850v_state::quickload_cb(snapsho
 
 TIMER_DEVICE_CALLBACK_MEMBER(pce220_state::pce220_timer_callback)
 {
-	m_timer_status = 1;
-	if (m_irq_mask & IRQ_FLAG_TIMER)
-	{
-		m_input_merger->in_w<2>(ASSERT_LINE);
-
-		m_irq_flag = (m_irq_flag & 0xfb) | (m_timer_status<<2);
-	}
+	// the timer flag toggles on every tick (a write to 14h forces it to 0);
+	// its 0->1 transitions latch the timer request
+	m_timer_status ^= 1;
+	if (m_timer_status)
+		irq_set(IRQ_FLAG_TIMER);
 }
 
 void pce220_state::pce220_palette(palette_device &palette) const
@@ -1176,9 +1207,6 @@ void pce220_state::pce220(machine_config &config)
 	Z80(config, m_maincpu, 3.072_MHz_XTAL); // CMOS-SC7852
 	m_maincpu->set_addrmap(AS_PROGRAM, &pce220_state::pce220_mem);
 	m_maincpu->set_addrmap(AS_IO, &pce220_state::pce220_io);
-
-	INPUT_MERGER_ANY_HIGH(config, m_input_merger);
-	m_input_merger->output_handler().set_inputline(m_maincpu, INPUT_LINE_IRQ0);
 
 	/* video hardware */
 	// 4 lines x 24 characters, resp. 144 x 32 pixel
@@ -1239,6 +1267,9 @@ void pcg850v_state::pcg850v(machine_config &config)
 	/* basic machine hardware */
 	m_maincpu->set_clock(8_MHz_XTAL); // CMOS-SC7852
 	m_maincpu->set_addrmap(AS_IO, &pcg850v_state::pcg850v_io);
+
+	// timer tick measured on a PC-G850VS: 0.398 s
+	TIMER(config.replace(), "pce220_timer").configure_periodic(FUNC(pcg850v_state::pce220_timer_callback), attotime::from_msec(398));
 
 	/* video hardware */
 	// 6 lines x 24 characters, resp. 144 x 48 pixel
