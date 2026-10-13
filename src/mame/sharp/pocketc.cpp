@@ -805,8 +805,9 @@ INPUT_PORTS_END
  * position) moved the cursor backwards, so it's bound the other way
  * round below -- KEYCODE_DOWN to 0x04, KEYCODE_UP to 0x08 -- to match
  * the real function of each bit rather than its on-screen position.
- * INS's real electrical position is still unknown -- KEYCODE_INSERT
- * isn't attached to anything below.
+ * INS lives at KEY8 bit 0x04 (user-confirmed 2026-10-13 by clicking the
+ * artwork's INS bezel, which drives that bit and inserts correctly) and
+ * is bound to KEYCODE_INSERT below.
  *
  * KEY5 bits 0x01/0x02 (user-confirmed, see chat history): these were the
  * driver's ORIGINAL UP/DOWN positions (bit 0x01 = UP, bit 0x02 = DOWN,
@@ -946,8 +947,7 @@ static INPUT_PORTS_START( pc1360 )
 	// CONFIRMED (headless bit-sweep/screenshot testing, independently
 	// reconfirmed by the user's own artwork remap -- see the block comment
 	// above INPUT_PORTS_START(pc1360)): this bit, originally labelled INS,
-	// is actually RIGHT. INS's own real electrical position/function is
-	// still unknown, so KEYCODE_INSERT isn't attached to anything below.
+	// is actually RIGHT. The real INS key is KEY8 0x04 (see below).
 	// PORT_CHAR added since this is a confirmed, working cursor key (unlike
 	// KEY5 0x04/0x08 above).
 	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("RIGHT") PORT_CODE(KEYCODE_RIGHT)  PORT_CHAR(UCHAR_MAMEKEY(RIGHT))
@@ -986,7 +986,13 @@ static INPUT_PORTS_START( pc1360 )
 	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("U     ?") PORT_CODE(KEYCODE_U)  PORT_CHAR('U')  PORT_CHAR('?')
 
 	PORT_START("KEY8")
-	PORT_BIT(0x0f, IP_ACTIVE_HIGH, IPT_UNUSED)
+	PORT_BIT(0x03, IP_ACTIVE_HIGH, IPT_UNUSED)
+	// CONFIRMED (user testing 2026-10-13 via the artwork's clickable INS
+	// bezel, which drives this bit and works as INS): this
+	// is the real INS key. Previously declared IPT_UNUSED, so only the
+	// bezel could reach it; now bound to the host Insert key as well.
+	PORT_BIT(0x04, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("INS") PORT_CODE(KEYCODE_INSERT)  PORT_CHAR(UCHAR_MAMEKEY(INSERT))
+	PORT_BIT(0x08, IP_ACTIVE_HIGH, IPT_UNUSED)
 	PORT_BIT(0x10, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("SPC") PORT_CODE(KEYCODE_SPACE)  PORT_CHAR(' ')
 	PORT_BIT(0x20, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("K") PORT_CODE(KEYCODE_K)  PORT_CHAR('K')
 	PORT_BIT(0x40, IP_ACTIVE_HIGH, IPT_KEYBOARD) PORT_NAME("I     Pi") PORT_CODE(KEYCODE_I)  PORT_CHAR('I')
